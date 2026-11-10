@@ -1,4 +1,4 @@
-//! Total resident memory (RSS) of this process tree, summed from `/proc`.
+//! Total resident memory (RSS) of this process tree.
 //!
 //! "Is this eating my RAM?" is a real question when several parallel agent
 //! sessions are running, so the sidebar header shows corral's own + all child
@@ -6,6 +6,9 @@
 //! `/proc/<pid>/status`, and each process's direct children in
 //! `/proc/<pid>/task/<pid>/children`, so the whole tree can be summed without
 //! spawning any subprocess or linking against platform APIs.
+//!
+//! macOS has no `/proc`; there the whole system is sampled with a single
+//! `ps -A -o pid=,ppid=,rss=` call and the tree is walked from that snapshot.
 
 /// Resident set size of `pid` in kilobytes, from the `VmRSS:` line of
 /// `/proc/<pid>/status` — or `None` if the process has exited or the file
@@ -53,8 +56,66 @@ pub fn total_rss_bytes() -> Option<u64> {
     Some(total_kb.saturating_mul(1024))
 }
 
-/// `/proc` is Linux-specific; other platforms have no equivalent cheap walk.
-#[cfg(not(target_os = "linux"))]
+/// macOS: one `ps` snapshot for the whole system (`pid`, parent `pid`, RSS in
+/// kB), then the same descendant walk as the Linux implementation. One
+/// subprocess per poll rather than one per process — this runs once per poll
+/// from the sidebar, not in a hot loop.
+#[cfg(target_os = "macos")]
+pub fn total_rss_bytes() -> Option<u64> {
+    use std::collections::HashMap;
+
+    let output = std::process::Command::new("ps")
+        .args(["-A", "-o", "pid=,ppid=,rss="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    // pid -> (ppid, rss_kb). Any line that doesn't parse is skipped rather
+    // than failing the whole read: the table is a snapshot, so a process can
+    // exit between being listed and being walked, exactly as on Linux.
+    let mut processes: HashMap<u32, (u32, u64)> = HashMap::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let mut fields = line.split_whitespace();
+        let (Some(pid), Some(ppid), Some(rss)) = (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        let (Ok(pid), Ok(ppid), Ok(rss)) =
+            (pid.parse::<u32>(), ppid.parse::<u32>(), rss.parse::<u64>())
+        else {
+            continue;
+        };
+        processes.insert(pid, (ppid, rss));
+    }
+
+    let this_pid = std::process::id();
+    if !processes.contains_key(&this_pid) {
+        // `ps` succeeded but we're somehow missing from its own snapshot —
+        // report "unknown" rather than a misleadingly small number.
+        return None;
+    }
+
+    let mut total_kb = 0u64;
+    let mut stack = vec![this_pid];
+    while let Some(pid) = stack.pop() {
+        if let Some(&(_, rss)) = processes.get(&pid) {
+            total_kb = total_kb.saturating_add(rss);
+        }
+        stack.extend(
+            processes
+                .iter()
+                .filter(|(_, (ppid, _))| *ppid == pid)
+                .map(|(child, _)| *child),
+        );
+    }
+    Some(total_kb.saturating_mul(1024))
+}
+
+/// No cheap process-tree walk wired up on this platform, so the sidebar's
+/// memory readout is simply hidden.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn total_rss_bytes() -> Option<u64> {
     None
 }
@@ -63,11 +124,11 @@ pub fn total_rss_bytes() -> Option<u64> {
 mod tests {
     #[test]
     fn total_rss_bytes_is_nonzero_and_at_least_this_process() {
-        // The current test process exists in /proc and has a nonzero RSS, so
-        // the walk must at least cover it (can't assert an exact value — RSS
-        // is inherently racy and machine-dependent).
+        // The current test process has a nonzero RSS, so the walk must at
+        // least cover it (can't assert an exact value — RSS is inherently
+        // racy and machine-dependent).
         let bytes = super::total_rss_bytes();
-        if cfg!(target_os = "linux") {
+        if cfg!(any(target_os = "linux", target_os = "macos")) {
             assert!(bytes.unwrap() > 0);
         } else {
             assert!(bytes.is_none());
