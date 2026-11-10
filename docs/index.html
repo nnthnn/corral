@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Corral: run a whole herd of coding agents</title>
+    <meta
+      name="description"
+      content="A Linux desktop app for running Claude Code, OpenCode, and Pi side by side. Every agent gets its own git worktree, branch, and PTY."
+    />
+    <link rel="canonical" href="https://getcorral.app/" />
+    <meta name="theme-color" content="#1a1510" />
+    <link rel="icon" type="image/png" href="assets/favicon.png" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://getcorral.app/" />
+    <meta property="og:title" content="Corral: run a whole herd of coding agents" />
+    <meta
+      property="og:description"
+      content="Every agent gets its own git worktree, branch, and PTY. Claude Code, OpenCode, and Pi, all in one window."
+    />
+    <meta
+      property="og:image"
+      content="https://getcorral.app/assets/corral-overview.png"
+    />
+    <meta
+      property="og:image:alt"
+      content="Corral's three-pane desktop UI with an agent working in one worktree and its branch diff on the right."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Corral: run a whole herd of coding agents" />
+    <meta
+      name="twitter:description"
+      content="Every agent gets its own git worktree, branch, and PTY."
+    />
+    <meta
+      name="twitter:image"
+      content="https://getcorral.app/assets/corral-overview.png"
+    />
+
+    <link rel="stylesheet" href="styles.css" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Corral",
+        "url": "https://getcorral.app/",
+        "description": "A Linux desktop app for running Claude Code, OpenCode, and Pi side by side, each in its own git worktree.",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Linux",
+        "downloadUrl": "https://github.com/nnthnn/corral/releases/latest",
+        "license": "https://github.com/nnthnn/corral/blob/main/LICENSE",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+
+    <header class="nav">
+      <div class="container nav-inner">
+        <a class="brand" href="/">
+          <img src="assets/icon.png" alt="" width="30" height="30" />
+          <span>corral</span>
+        </a>
+        <nav class="nav-links" aria-label="Main">
+          <a href="#features">Features</a>
+          <a href="#demo">Demo</a>
+          <a href="#install">Install</a>
+          <a href="https://github.com/nnthnn/corral">GitHub</a>
+        </nav>
+        <a
+          class="button button-small"
+          href="https://github.com/nnthnn/corral/releases/latest"
+          >Download</a
+        >
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero container">
+        <div class="hero-copy">
+          <p class="eyebrow">Linux desktop app</p>
+          <h1>Run a whole <span class="accent">herd</span> of coding agents.</h1>
+          <p class="lede">
+            Every agent gets its own git worktree, branch, and PTY. Corral
+            keeps them in line while you keep moving.
+          </p>
+          <div class="actions">
+            <a
+              class="button"
+              href="https://github.com/nnthnn/corral/releases/latest"
+              >Download for Linux</a
+            >
+            <a
+              class="button button-ghost"
+              href="https://github.com/nnthnn/corral"
+              >View on GitHub</a
+            >
+          </div>
+          <p class="meta">.deb &middot; .rpm &middot; .AppImage</p>
+        </div>
+        <div class="hero-art" aria-hidden="true">
+          <div class="hero-glow"></div>
+          <img
+            src="assets/buck-pointing.webp"
+            alt=""
+            width="420"
+            height="427"
+            decoding="async"
+          />
+        </div>
+      </section>
+
+      <figure class="shot container">
+        <img
+          src="assets/corral-overview.png"
+          alt="Corral's three-pane window: projects and worktrees on the left, an agent reviewing OAuth code in the center, and the branch's changed files on the right."
+          width="1920"
+          height="1080"
+          decoding="async"
+        />
+        <figcaption>
+          One window. Every worktree, every agent, every diff.
+        </figcaption>
+      </figure>
+
+      <section class="stack container" aria-label="Supported agents">
+        <p>Works with</p>
+        <ul>
+          <li>Claude Code</li>
+          <li>OpenCode</li>
+          <li>Pi</li>
+        </ul>
+      </section>
+
+      <section id="features" class="section container">
+        <p class="eyebrow">What it does</p>
+        <h2>One corral. Every agent accounted for.</h2>
+        <div class="feature-grid">
+          <article class="card">
+            <span class="card-number">01</span>
+            <h3>Isolated worktrees</h3>
+            <p>
+              Every agent gets its own branch and directory under
+              <code>~/corral</code>. Your main checkout stays untouched.
+            </p>
+          </article>
+          <article class="card">
+            <span class="card-number">02</span>
+            <h3>Real PTY sessions</h3>
+            <p>
+              Claude Code, OpenCode, and Pi run as real CLIs in a terminal,
+              with scrollback and session resume.
+            </p>
+          </article>
+          <article class="card">
+            <span class="card-number">03</span>
+            <h3>Changes at a glance</h3>
+            <p>
+              The right pane lists every file the branch touched. Click one
+              to read its diff without leaving the app.
+            </p>
+          </article>
+          <article class="card">
+            <span class="card-number">04</span>
+            <h3>Keyboard first</h3>
+            <p>
+              <kbd>Ctrl</kbd>+<kbd>K</kbd> jumps anywhere.
+              <kbd>Ctrl</kbd>+<kbd>1-9</kbd> switches worktrees.
+              <kbd>Ctrl</kbd>+<kbd>Tab</kbd> cycles tabs.
+            </p>
+          </article>
+          <article class="card">
+            <span class="card-number">05</span>
+            <h3>Run and provision</h3>
+            <p>
+              One-shot setup commands and a long-lived Run panel per worktree.
+              The dev server stays out of the agent's pen.
+            </p>
+          </article>
+          <article class="card">
+            <span class="card-number">06</span>
+            <h3>Git and PRs</h3>
+            <p>
+              Fast-forward merge, push, open a PR with <code>gh</code>, and
+              watch CI checks without switching windows.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section id="demo" class="section container demo">
+        <p class="eyebrow">Demo</p>
+        <h2>See it move.</h2>
+        <p class="section-intro">
+          Jump between worktrees, then review the diff. No tab hunting, no
+          terminal juggling.
+        </p>
+        <figure class="gif-frame">
+          <img
+            src="assets/corral-demo.gif"
+            alt="Corral demo: opening the command palette, switching to another worktree, and reviewing two branch diffs."
+            width="1920"
+            height="1080"
+            loading="lazy"
+            decoding="async"
+          />
+        </figure>
+      </section>
+
+      <section class="section container how">
+        <p class="eyebrow">How it works</p>
+        <h2>Turn one loose. Then another.</h2>
+        <ol class="steps">
+          <li>
+            <span>01</span>
+            <h3>Add a project</h3>
+            <p>
+              Point Corral at any local git repo. It handles the worktrees
+              from there.
+            </p>
+          </li>
+          <li>
+            <span>02</span>
+            <h3>Start an agent</h3>
+            <p>
+              Pick a harness and a worktree. The agent comes up in its own
+              terminal.
+            </p>
+          </li>
+          <li>
+            <span>03</span>
+            <h3>Review and merge</h3>
+            <p>
+              Read the diff, merge the branch, or open a PR. Keep the herd
+              moving.
+            </p>
+          </li>
+        </ol>
+      </section>
+
+      <section id="install" class="section container install">
+        <div>
+          <p class="eyebrow">Install</p>
+          <h2>Get the herd moving.</h2>
+          <p class="section-intro">
+            Download the latest release for Linux, or build from source and
+            install the CLI.
+          </p>
+          <div class="actions">
+            <a
+              class="button"
+              href="https://github.com/nnthnn/corral/releases/latest"
+              >Download for Linux</a
+            >
+            <a
+              class="button button-ghost"
+              href="https://github.com/nnthnn/corral#develop"
+              >Build from source</a
+            >
+          </div>
+        </div>
+        <pre class="cli" aria-label="Corral CLI example"><code><span class="prompt">$</span> corral new farm-api oauth-login --no-agent
+<span class="out">&rarr; ~/corral/farm-api/oauth-login</span>
+
+<span class="prompt">$</span> corral list
+farm-api/oauth-login  <span class="branch">[feat/oauth-login]</span>
+    &uarr;0 &darr;0  ~1 +0 ?0
+field-notes/export    <span class="branch">[feat/export]</span>
+    &uarr;2 &darr;0  clean</code></pre>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container footer-inner">
+        <a class="brand" href="/">
+          <img src="assets/icon.png" alt="" width="24" height="24" />
+          <span>corral</span>
+        </a>
+        <nav aria-label="Footer">
+          <a href="https://github.com/nnthnn/corral">GitHub</a>
+          <a href="https://github.com/nnthnn/corral/releases">Releases</a>
+          <a href="https://github.com/nnthnn/corral#readme">README</a>
+          <a href="https://github.com/nnthnn/corral/blob/main/LICENSE">License</a>
+        </nav>
+        <p>Built for Linux. Free and open source.</p>
+      </div>
+    </footer>
+  </body>
+</html>

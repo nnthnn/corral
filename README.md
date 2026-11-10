@@ -13,10 +13,27 @@ each isolated in its own git worktree. Every session gets its own worktree,
 branch, and PTY, so several agents can work at once without stepping on each
 other. Claude Code, OpenCode, and Pi are all supported.
 
-<!-- TODO: screenshot of the 3-pane shell -->
+![corral's three-pane shell: an agent working in one worktree, with the Changes
+pane listing that branch's diff](docs/assets/corral-overview.png)
 
 > Worktrees live at `<worktrees_root>/<project>/<feature>` on branch
 > `feat/<feature>`. The root defaults to `~/corral` and is configurable.
+
+## Demo
+
+Search with `Ctrl+K` to jump between worktrees, then click a changed file to
+review its diff.
+
+![corral demo: opening the command palette, switching worktrees, and reviewing
+branch diffs](docs/assets/corral-demo.gif)
+
+## Screenshots
+
+| Review a branch diff | Jump between worktrees |
+| :---: | :---: |
+| [![Diff tab showing a paginated query against the branch base](docs/assets/corral-diff.png)](docs/assets/corral-diff.png) | [![Command palette listing worktrees and actions](docs/assets/corral-command-palette.png)](docs/assets/corral-command-palette.png) |
+
+<sub>Screenshots use a throwaway demo project.</sub>
 
 ## Install
 

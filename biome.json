@@ -11,7 +11,14 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["src/**", "*.ts", "*.json", "!src-tauri", "!src/assets"]
+    "includes": [
+      "src/**",
+      "*.ts",
+      "*.json",
+      "docs/**/*.css",
+      "!src-tauri",
+      "!src/assets"
+    ]
   },
   "formatter": {
     "enabled": true,
