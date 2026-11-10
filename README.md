@@ -8,10 +8,14 @@
 
 </div>
 
-A Linux-native desktop app for running multiple parallel coding-agent sessions,
-each isolated in its own git worktree. Every session gets its own worktree,
-branch, and PTY, so several agents can work at once without stepping on each
-other. Claude Code, OpenCode, and Pi are all supported.
+A Linux and macOS desktop app for running multiple parallel coding-agent
+sessions, each isolated in its own git worktree. Every session gets its own
+worktree, branch, and PTY, so several agents can work at once without stepping
+on each other. Claude Code, OpenCode, and Pi are all supported.
+
+> Windows isn't supported yet — the app still assumes a Unix process model
+> (Unix-socket hooks, symlinked `.claude` dirs, `/proc`-based process
+> tracking). Linux and macOS are the supported platforms for now.
 
 ![corral's three-pane shell: an agent working in one worktree, with the Changes
 pane listing that branch's diff](docs/assets/corral-overview.png)
@@ -37,8 +41,13 @@ branch diffs](docs/assets/corral-demo.gif)
 
 ## Install
 
-Download the latest `.deb`, `.rpm`, or `.AppImage` from the
+Download the latest `.deb`, `.rpm`, or `.AppImage` (Linux) or the `.dmg`
+(macOS, universal binary) from the
 [Releases](https://github.com/nnthnn/corral/releases) page.
+
+macOS builds are currently unsigned unless the release was built with signing
+secrets configured, so the first launch may need **right-click → Open** to get
+past Gatekeeper.
 
 ## Layout
 
@@ -54,9 +63,10 @@ corral/
 
 ## Develop
 
-Requirements: Rust, Node + pnpm, and the Linux WebKitGTK stack
-(`webkit2gtk-4.1`, `libsoup-3.0`). `git`, your agent CLI (`claude` and/or
-`opencode`), `gh` (for PRs), and `zeditor` (Zed's CLI) should be on PATH.
+Requirements: Rust, Node + pnpm, and — on Linux — the WebKitGTK stack
+(`webkit2gtk-4.1`, `libsoup-3.0`). macOS needs only Xcode's command-line tools.
+`git`, your agent CLI (`claude` and/or `opencode`), `gh` (for PRs), and your
+editor's CLI (`zeditor` on Linux, `zed` on macOS) should be on PATH.
 
 ```fish
 pnpm install        # frontend deps + Tauri CLI

@@ -174,8 +174,9 @@ pub fn home_dir() -> Option<String> {
 }
 
 /// Total resident memory (RSS) of this process and all its descendants, in
-/// bytes — `None` on platforms without `/proc` (non-Linux). Polled by the
-/// sidebar header to answer "is this eating my RAM" across parallel agents.
+/// bytes — `None` on platforms without a process-tree walk wired up yet
+/// (see `corral_core::process`). Polled by the sidebar header to answer "is
+/// this eating my RAM" across parallel agents.
 #[tauri::command]
 pub fn memory_usage() -> Option<u64> {
     corral_core::process::total_rss_bytes()
@@ -191,9 +192,12 @@ pub fn open_in_zed(path: String, editor_command: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Kitty's CLI flag for the startup directory is `--directory`/`-d`, not
-/// `--working-directory` (Ghostty/Alacritty). Matched on the command's file
-/// name so a full path (e.g. `/usr/bin/kitty`) still resolves correctly.
+/// Terminal-specific way of asking for a starting directory. Kitty's flag is
+/// `--directory`/`-d`, not `--working-directory` (Ghostty/Alacritty), and
+/// macOS's `open` takes an app plus the folder to hand it — `open -a Terminal
+/// <dir>` is the macOS equivalent of `--working-directory`. Matched on the
+/// command's file name so a full path (e.g. `/usr/bin/kitty`) still resolves
+/// correctly.
 fn terminal_args(terminal_command: &str, path: &str) -> Vec<String> {
     let program_name = std::path::Path::new(terminal_command)
         .file_name()
@@ -201,6 +205,7 @@ fn terminal_args(terminal_command: &str, path: &str) -> Vec<String> {
         .unwrap_or(terminal_command);
     match program_name {
         "kitty" => vec!["--directory".to_string(), path.to_string()],
+        "open" => vec!["-a".to_string(), "Terminal".to_string(), path.to_string()],
         _ => vec![format!("--working-directory={path}")],
     }
 }
@@ -238,6 +243,18 @@ mod tests {
         assert_eq!(
             terminal_args("kitty", "/some/path"),
             vec!["--directory".to_string(), "/some/path".to_string()]
+        );
+    }
+
+    #[test]
+    fn terminal_args_uses_open_app_terminal_for_macos() {
+        assert_eq!(
+            terminal_args("open", "/some/path"),
+            vec![
+                "-a".to_string(),
+                "Terminal".to_string(),
+                "/some/path".to_string()
+            ]
         );
     }
 

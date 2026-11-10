@@ -16,6 +16,23 @@ use crate::error::Result;
 use crate::json_store;
 use crate::paths;
 
+/// Default external-editor command for the "Zed" button. Zed's CLI is named
+/// differently per platform: distro packages on Linux install `zeditor` (the
+/// `zed` name is often a stale wrapper — see AGENTS.md), while the macOS app
+/// installs `zed`.
+#[cfg(target_os = "macos")]
+pub const DEFAULT_EDITOR_COMMAND: &str = "zed";
+#[cfg(not(target_os = "macos"))]
+pub const DEFAULT_EDITOR_COMMAND: &str = "zeditor";
+
+/// Default external-terminal command for the "Shell" button. macOS has no
+/// `--working-directory` convention: `open -a Terminal <dir>` is the
+/// equivalent (see `commands/system.rs::terminal_args`).
+#[cfg(target_os = "macos")]
+pub const DEFAULT_TERMINAL_COMMAND: &str = "open";
+#[cfg(not(target_os = "macos"))]
+pub const DEFAULT_TERMINAL_COMMAND: &str = "ghostty";
+
 fn settings_path() -> Result<PathBuf> {
     Ok(settings_path_in(&paths::config_root()?))
 }
@@ -77,15 +94,17 @@ pub struct Settings {
     pub scrollback_kb: u32,
     /// Default state of the DeleteDialog's "Also delete branch" checkbox.
     pub delete_branch_default: bool,
-    /// Inhibit system sleep/idle (via `systemd-inhibit`) while at least one
-    /// agent session is actively working (running, not waiting on the user).
+    /// Inhibit system sleep/idle (via the platform's inhibitor — see
+    /// `crate::caffeinate`) while at least one agent session is actively
+    /// working (running, not waiting on the user).
     pub caffeinate_enabled: bool,
     /// Root directory under which new worktrees are created. Empty string
     /// means "use the default" (`~/corral`) — see `config::worktrees_root`.
     /// May contain a leading `~` for the home directory.
     pub worktrees_root: String,
     /// Command used by the "Shell" button to open an external terminal at a
-    /// worktree's path (e.g. `ghostty`, `alacritty`, `kitty`).
+    /// worktree's path (e.g. `ghostty`, `alacritty`, `kitty` on Linux, `open`
+    /// on macOS — see `DEFAULT_TERMINAL_COMMAND`).
     pub terminal_command: String,
     /// Auto-stop a session once it's been continuously "waiting" for
     /// `idle_timeout_minutes` — a cost/resource guard for unattended
@@ -123,7 +142,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            editor_command: "zeditor".into(),
+            editor_command: DEFAULT_EDITOR_COMMAND.into(),
             notifications_enabled: true,
             terminal_font_size: 13,
             diff_font_size: 16,
@@ -143,7 +162,7 @@ impl Default for Settings {
             delete_branch_default: true,
             caffeinate_enabled: true,
             worktrees_root: String::new(),
-            terminal_command: "ghostty".into(),
+            terminal_command: DEFAULT_TERMINAL_COMMAND.into(),
             idle_timeout_enabled: false,
             idle_timeout_minutes: 30,
             claude_executable_path: String::new(),
@@ -221,7 +240,7 @@ mod tests {
         assert_eq!(s.changes_width, 384);
         assert!(s.caffeinate_enabled);
         assert!(s.project_order.is_empty());
-        assert_eq!(s.terminal_command, "ghostty");
+        assert_eq!(s.terminal_command, DEFAULT_TERMINAL_COMMAND);
         assert!(!s.idle_timeout_enabled);
         assert_eq!(s.idle_timeout_minutes, 30);
     }
@@ -278,13 +297,19 @@ mod tests {
     }
 
     #[test]
-    fn terminal_command_defaults_to_ghostty() {
+    fn terminal_command_defaults_to_the_platform_default() {
         let s = Settings::default();
-        assert_eq!(s.terminal_command, "ghostty");
+        assert_eq!(s.terminal_command, DEFAULT_TERMINAL_COMMAND);
     }
 
     #[test]
-    fn deserializes_missing_terminal_command_to_ghostty() {
+    fn editor_command_defaults_to_the_platform_default() {
+        let s = Settings::default();
+        assert_eq!(s.editor_command, DEFAULT_EDITOR_COMMAND);
+    }
+
+    #[test]
+    fn deserializes_missing_terminal_command_to_the_platform_default() {
         // Simulates a settings.json written before this field existed.
         let json = r#"{
             "editor_command": "zeditor",
@@ -296,7 +321,7 @@ mod tests {
             "extra_instructions": ""
         }"#;
         let s: Settings = serde_json::from_str(json).unwrap();
-        assert_eq!(s.terminal_command, "ghostty");
+        assert_eq!(s.terminal_command, DEFAULT_TERMINAL_COMMAND);
     }
 
     #[test]
