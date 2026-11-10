@@ -229,12 +229,14 @@ export function SettingsForm() {
                 <option value="ghostty" />
                 <option value="alacritty" />
                 <option value="kitty" />
+                <option value="open" />
               </datalist>
             </label>
             <p className="hint">
               Run by the "Shell" button using <code>--working-directory</code>{" "}
               (Ghostty/Alacritty/Kitty); other terminals may need a different
-              flag.
+              flag. On macOS, <code>open</code> opens Terminal at the worktree
+              path.
             </p>
             <label>
               Worktrees root

@@ -394,15 +394,30 @@ const OPENCODE2_MARKER: &str = "CORRAL_OC2_TOKEN";
 /// forever. The marker lets corral find the exact processes to kill even
 /// though no parent-child relationship survives.
 ///
-/// Linux-specific: scans /proc. Best-effort: a process that dies (or becomes
-/// unreadable) between the scan and the kill is simply skipped. Idempotent
-/// once no marker-bearing processes remain, so it's safe to call from every
-/// session-ending path (`Session::kill`, the reader thread's natural-exit
-/// handling, and `Session::drop`) as a backstop.
+/// Best-effort: a process that dies (or becomes unreadable) between the scan
+/// and the kill is simply skipped. Idempotent once no marker-bearing
+/// processes remain, so it's safe to call from every session-ending path
+/// (`Session::kill`, the reader thread's natural-exit handling, and
+/// `Session::drop`) as a backstop.
 fn kill_opencode2_children(token: &str) {
     let needle = format!("{OPENCODE2_MARKER}={token}");
+    for pid in marked_process_pids(&needle) {
+        // `kill -9` rather than a libc call: src-tauri doesn't depend on
+        // libc directly, and `kill` is POSIX-required.
+        let _ = std::process::Command::new("kill")
+            .arg("-9")
+            .arg(pid.to_string())
+            .status();
+    }
+}
+
+/// Pids of every process whose environment carries `needle`
+/// (`CORRAL_OC2_TOKEN=<token>`).
+#[cfg(target_os = "linux")]
+fn marked_process_pids(needle: &str) -> Vec<u32> {
+    let mut pids = Vec::new();
     let Ok(entries) = std::fs::read_dir("/proc") else {
-        return;
+        return pids;
     };
     for entry in entries.flatten() {
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
@@ -416,16 +431,39 @@ fn kill_opencode2_children(token: &str) {
         let Ok(environ) = std::fs::read(entry.path().join("environ")) else {
             continue;
         };
-        let marked = environ.split(|b| *b == 0).any(|kv| kv == needle.as_bytes());
-        if marked {
-            // `kill -9` rather than a libc call: src-tauri doesn't depend on
-            // libc directly, and `kill` is POSIX-required.
-            let _ = std::process::Command::new("kill")
-                .arg("-9")
-                .arg(pid.to_string())
-                .status();
+        if environ.split(|b| *b == 0).any(|kv| kv == needle.as_bytes()) {
+            pids.push(pid);
         }
     }
+    pids
+}
+
+/// macOS has no `/proc` to read another process's environment from. `ps -E`
+/// appends it to the command column instead, so one snapshot finds marker
+/// carriers the same way (`-ww` disables the width truncation that would cut
+/// the environment tail off). Values in the marker contain no whitespace, so
+/// a plain substring test per line can't match a partial token.
+#[cfg(target_os = "macos")]
+fn marked_process_pids(needle: &str) -> Vec<u32> {
+    let Ok(output) = std::process::Command::new("ps")
+        .args(["-Aww", "-E", "-o", "pid=,command="])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.contains(needle))
+        .filter_map(|line| line.split_whitespace().next()?.parse::<u32>().ok())
+        .collect()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn marked_process_pids(_needle: &str) -> Vec<u32> {
+    Vec::new()
 }
 
 /// A fresh `CORRAL_OC2_TOKEN` value unique to this session: the registry id
@@ -1747,6 +1785,7 @@ mod tests {
     /// `kill_opencode2_children` runs, no matter how it's parented (the real
     /// `serve --stdio` is detached/re-parented, so the sweep has to work by
     /// marker, not by process-tree ancestry).
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn kill_opencode2_children_kills_marked_processes() {
         let token = new_opencode2_token("proj/feat");
@@ -1785,6 +1824,7 @@ mod tests {
     /// The sweep must only kill processes bearing the session's own marker —
     /// a different corral session's processes (and the user's own opencode
     /// processes, which never carry a marker) must be left untouched.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn kill_opencode2_children_spares_unmarked_processes() {
         let token = new_opencode2_token("proj/feat");
@@ -1822,6 +1862,7 @@ mod tests {
     /// portable_pty's kill (which polls `try_wait`). The marker sweep uses
     /// raw `kill -9` with no reaping, so its tests must treat a zombie
     /// (killed but unreaped) as dead.
+    #[cfg(target_os = "linux")]
     fn process_running(pid: u32) -> bool {
         let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
             return false;
@@ -1833,22 +1874,35 @@ mod tests {
         state != "Z"
     }
 
-    /// Poll until `pid`'s `/proc/<pid>/environ` actually contains the marker.
-    /// `kill_opencode2_children` finds processes by reading that environ, and
-    /// on a loaded CI runner even a directly-spawned `sleep` can briefly read
-    /// back empty environ mid-exec — which would make the sweep skip it. Wait
-    /// for the marker to be observable first so the sweep is deterministic.
+    /// macOS equivalent: `ps` still lists a zombie, but its state starts with
+    /// `Z`; a vanished pid produces empty output.
+    #[cfg(target_os = "macos")]
+    fn process_running(pid: u32) -> bool {
+        let Ok(output) = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p"])
+            .arg(pid.to_string())
+            .output()
+        else {
+            return false;
+        };
+        let stat = String::from_utf8_lossy(&output.stdout);
+        let stat = stat.trim();
+        !stat.is_empty() && !stat.starts_with('Z')
+    }
+
+    /// Poll until the sweep can actually see `pid` carrying the marker. On a
+    /// loaded CI runner even a directly-spawned `sleep` can briefly be
+    /// invisible to the scan mid-exec, which would make the sweep skip it —
+    /// so wait for observability first and keep the test deterministic.
     fn wait_for_marker_visible(pid: u32, token: &str) {
         let needle = format!("{OPENCODE2_MARKER}={token}");
         for _ in 0..200 {
-            if let Ok(environ) = std::fs::read(format!("/proc/{pid}/environ"))
-                && environ.split(|b| *b == 0).any(|kv| kv == needle.as_bytes())
-            {
+            if marked_process_pids(&needle).contains(&pid) {
                 return;
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        panic!("marker never became visible in /proc/{pid}/environ");
+        panic!("marker never became visible for pid {pid}");
     }
 
     #[test]

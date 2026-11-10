@@ -58,3 +58,18 @@ jobs:
         run: just frontend
       - name: Test
         run: just test
+
+  # The Linux job is the real gate, but macOS-only code (the caffeinate
+  # inhibitor, the `/proc` fallbacks in process/session handling) sits behind
+  # `cfg(target_os = "macos")` and would otherwise never be compiled before a
+  # release. This job only needs to type-check, so it skips the frontend
+  # toolchain and the full `just ci` suite.
+  macos-check:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo registry/build
+        uses: Swatinem/rust-cache@v2
+      - name: Rust check
+        run: cargo check --workspace --all-targets

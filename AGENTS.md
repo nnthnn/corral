@@ -7,10 +7,14 @@
 
 ## What corral is
 
-A **Linux-native Tauri desktop app** for running multiple parallel coding-agent
-sessions, each isolated in its own git worktree. Each agent is a real CLI
-process (Claude Code, OpenCode, or Pi) running in a PTY, shown in an embedded
-terminal. There's also a `corral` CLI.
+A **Tauri desktop app for Linux and macOS** for running multiple parallel
+coding-agent sessions, each isolated in its own git worktree. Each agent is a
+real CLI process (Claude Code, OpenCode, or Pi) running in a PTY, shown in an
+embedded terminal. There's also a `corral` CLI.
+
+Windows is not supported yet: the code still assumes a Unix process model
+(Unix-socket hooks, `symlink`'d `.claude` dirs, `/proc`-based process
+tracking, `systemd-inhibit`/`caffeinate` sleep guards).
 
 ## Architecture
 
@@ -188,10 +192,22 @@ git push origin HEAD
 git push origin vX.Y.Z   # pushes the tag, which triggers the Release workflow
 ```
 
-The `.github/workflows/release.yml` workflow runs on `v*` tag pushes, verifies
-the tag matches the Cargo.toml version, builds the `.deb`/`.rpm`/`.AppImage`
-bundles, and publishes them as a GitHub Release. Use `--no-commit` /
+The `.github/workflows/release.yml` workflow runs on `v*` tag pushes and builds
+two platforms in parallel, then publishes every artifact in one GitHub Release:
+
+- **Linux** (`ubuntu-latest`): `.deb` / `.rpm` / `.AppImage`.
+- **macOS** (`macos-14`): a universal (arm64 + x86_64) `.dmg`, built with
+  `pnpm tauri build --target universal-apple-darwin`.
+
+Each job re-verifies the tag matches the Cargo.toml version. macOS signing +
+notarization is opt-in via repository secrets (`APPLE_CERTIFICATE`,
+`APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
+`APPLE_PASSWORD`, `APPLE_TEAM_ID`); with none configured the dmg is unsigned
+and needs Gatekeeper's right-click → Open on first launch. Use `--no-commit` /
 `--no-tag` on the script to stop short (e.g. `just bump patch --no-tag`).
+
+`ci.yml` also has a `macos-check` job that runs `cargo check` on macOS, purely
+so `cfg(target_os = "macos")` code gets compiled before a release.
 
 ## Gotchas / hard-won lessons
 
@@ -237,6 +253,16 @@ bundles, and publishes them as a GitHub Release. Use `--no-commit` /
   unchanged for the `inset-0` panes. If a new terminal container uses padding
   and looks a row short/tall, add `.xterm-fit` — don't "fix" it by trimming
   padding.
+- **Gate platform-specific workarounds on `target_os`, not just `dev`.**
+  Now that macOS builds ship too, a bare `cfg(not(dev))` means "every release
+  build on every OS." The localhost-plugin content-serving workaround is
+  webkit2gtk-only, so it's `#[cfg(all(not(dev), target_os = "linux"))]` (and
+  the Linux webview gets `WebviewUrl::External` while dev/macOS use the normal
+  `WebviewUrl::App`). The sleep inhibitor (`systemd-inhibit` vs `caffeinate`)
+  and the process-tree RSS walk (`/proc` vs a `ps` snapshot) are likewise
+  per-platform. The `[patch.crates-io]` tauri/wry forks can't be target-gated
+  (Cargo has no per-target `[patch]`), so they apply everywhere, but their
+  fixes are Linux-only at runtime.
 - **Bundled builds need webkit2gtk workarounds on this system (CachyOS
   rolling release, `webkit2gtk-4.1 2.52.x`).** Two separate upstream bugs,
   both worked around, both required to get past a blank white

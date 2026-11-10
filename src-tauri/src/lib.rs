@@ -65,13 +65,17 @@ pub fn run() {
         .init();
     tracing::info!("corral starting");
 
-    // Tauri's default custom-protocol content serving (tauri://localhost)
-    // never completes navigation on this system's webkit2gtk — the window
-    // stays stuck on about:blank. Real HTTP navigation (the Vite dev server,
-    // and this plugin) works fine, so bundled builds serve assets the same
-    // way dev builds do. Separately, the ipc:// command-dispatch channel
-    // needed its own fix — see the `tauri` patch in the workspace Cargo.toml.
-    #[cfg(not(dev))]
+    // On Linux, Tauri's default custom-protocol content serving
+    // (tauri://localhost) never completes navigation on this system's
+    // webkit2gtk — the window stays stuck on about:blank. Real HTTP
+    // navigation (the Vite dev server, and this plugin) works fine, so
+    // bundled Linux builds serve assets the same way dev builds do. This is
+    // specific to webkit2gtk/Wry: macOS (WKWebView) and Windows (WebView2)
+    // serve the custom protocol correctly, so they keep the normal
+    // `WebviewUrl::App` path (see the `url` selection in `setup` below).
+    // Separately, the ipc:// command-dispatch channel needed its own fix —
+    // see the `tauri` patch in the workspace Cargo.toml.
+    #[cfg(all(not(dev), target_os = "linux"))]
     let port = match portpicker::pick_unused_port() {
         Some(port) => port,
         None => {
@@ -87,13 +91,13 @@ pub fn run() {
     // own "localhost" resolution can try 127.0.0.1 first, hitting nothing
     // and failing with "Connection refused". Bind and navigate to the same
     // explicit IPv4 loopback address so they can't disagree.
-    #[cfg(not(dev))]
+    #[cfg(all(not(dev), target_os = "linux"))]
     let builder = tauri::Builder::default().plugin(
         tauri_plugin_localhost::Builder::new(port)
             .host("127.0.0.1")
             .build(),
     );
-    #[cfg(dev)]
+    #[cfg(not(all(not(dev), target_os = "linux")))]
     let builder = tauri::Builder::default();
 
     builder
@@ -173,13 +177,20 @@ pub fn run() {
         .setup(move |app| {
             app.manage(browser_host::BrowserHosts::default());
 
-            #[cfg(dev)]
-            {
-                WebviewWindowBuilder::new(
-                    app,
-                    "main",
-                    WebviewUrl::App(std::path::PathBuf::from("/")),
-                )
+            // Bundled Linux builds load from the localhost plugin (see the
+            // `port`/`builder` setup above — capabilities/default.json grants
+            // that origin the same permissions as local content via its
+            // `remote.urls` wildcard, so no runtime capability is needed).
+            // Dev builds and non-Linux platforms use the normal
+            // custom-protocol asset serving.
+            #[cfg(all(not(dev), target_os = "linux"))]
+            let url = tauri::Url::parse(&format!("http://127.0.0.1:{port}"))
+                .map(WebviewUrl::External)
+                .expect("just-formatted loopback URL");
+            #[cfg(not(all(not(dev), target_os = "linux")))]
+            let url = WebviewUrl::App(std::path::PathBuf::from("/"));
+
+            WebviewWindowBuilder::new(app, "main", url)
                 .title("Corral")
                 .inner_size(1100.0, 720.0)
                 // Must stay >= the app grid's hard floor (256px sidebar +
@@ -189,25 +200,6 @@ pub fn run() {
                 .min_inner_size(1040.0, 480.0)
                 .decorations(should_decorate())
                 .build()?;
-            }
-
-            #[cfg(not(dev))]
-            {
-                // capabilities/default.json grants this origin the same
-                // permissions as local content via a `remote.urls` wildcard
-                // (`http://127.0.0.1:*`), so no runtime capability is needed.
-                let url: tauri::Url = format!("http://127.0.0.1:{port}").parse().unwrap();
-                WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
-                    .title("Corral")
-                    .inner_size(1100.0, 720.0)
-                    // Must stay >= the app grid's hard floor (256px sidebar +
-                    // 480px min middle column + 280px changes pane = 1016px in
-                    // src/styles.css's `.app` rule), or the window can shrink
-                    // past what the layout can render and clip content.
-                    .min_inner_size(1040.0, 480.0)
-                    .decorations(should_decorate())
-                    .build()?;
-            }
 
             // Self-healing: a worktree removed out-of-band (not through
             // corral's own `worktree::remove`) leaves orphaned entries in the
