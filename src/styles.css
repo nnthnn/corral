@@ -1,0 +1,756 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #c4483a;
+  --color-primary-press: #a83b2f;
+  --color-secondary: #c49a3a;
+  --color-bg: #1a1510;
+  --color-surface: #221c14;
+  --color-surface-2: #2a2318;
+  --color-border: #362e23;
+  --color-text: #ede8e0;
+  --color-muted: #8a8070;
+  --color-success: #8fae6d;
+  --color-warning: #c49a3a;
+  --color-danger: #c4483a;
+  --color-decorative: #b285a8;
+
+  --font-sans: Inter, "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, Menlo, monospace;
+
+  --text-body: 14px;
+  --text-body--line-height: 1.4;
+  --text-body--font-weight: 400;
+  --text-heading: 15px;
+  --text-heading--line-height: 1.2;
+  --text-heading--font-weight: 600;
+  --text-label: 11px;
+  --text-label--line-height: 1;
+  --text-label--font-weight: 500;
+  --text-caption: 0.78rem;
+  --text-code: 0.8rem;
+  --text-sub: 0.85rem;
+
+  --radius-sm: 3px;
+  --radius-md: 5px;
+}
+
+@keyframes reselect-flash {
+  0% {
+    opacity: 0.4;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes project-add-nudge {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-primary) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px
+      color-mix(in srgb, var(--color-primary) 45%, transparent);
+  }
+}
+
+@layer components {
+  /* Global themed focus ring — catches every focusable element that doesn't
+   * define its own focus style (tabs, custom `div[role=button]` rows, the
+   * resize splitter, the `dialog` element itself, etc.), so nothing falls
+   * back to the native browser/webkit2gtk outline (which renders purple on
+   * this system). `.btn:focus-visible` below stays more specific and wins
+   * on buttons, since it also layers in the themed border color. */
+  :focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 2px var(--color-surface),
+      0 0 0 4px var(--color-primary);
+  }
+  dialog:focus-visible {
+    box-shadow: none;
+  }
+
+  .wt-group.collapsed .wt-item {
+    @apply hidden;
+  }
+  .wt-group + .wt-group {
+    @apply pt-3;
+    position: relative;
+  }
+  .wt-group + .wt-group::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 1rem;
+    right: 1rem;
+    height: 2px; /* gives the groove depth */
+    border-top: 1px solid rgba(26, 21, 16, 0.85);
+    border-bottom: 1px solid rgba(237, 232, 224, 0.08);
+  }
+  .wt-group-head.dragging {
+    @apply opacity-50;
+  }
+  /* Inset box-shadow instead of a border so the drop-position hint doesn't
+   * shift the row's box size/layout while dragging over it. */
+  .wt-group-head.drag-over-before {
+    box-shadow: inset 0 2px 0 0 var(--color-primary);
+  }
+  .wt-group-head.drag-over-after {
+    box-shadow: inset 0 -2px 0 0 var(--color-primary);
+  }
+  .wt-item {
+    @apply flex items-center gap-2 py-2 px-2 min-h-12 rounded-md cursor-pointer;
+    max-height: 3rem;
+    transition:
+      max-height 200ms ease-out,
+      opacity 200ms ease-out,
+      padding 200ms ease-out,
+      margin 200ms ease-out;
+  }
+  .wt-item.exiting {
+    max-height: 0;
+    min-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    margin: 0;
+    opacity: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .wt-item:hover {
+    @apply bg-surface-2;
+  }
+  .wt-item.active {
+    @apply bg-surface-2;
+  }
+  /* Dim idle row names so the row you're actually looking at (active) or
+   * one asking for something (attention/unread) reads as brighter by
+   * contrast, rather than every name competing at full white. Mirrors the
+   * same "reserve color for the row you're looking at" treatment already
+   * used below for the git-stat badges. */
+  .wt-name {
+    @apply text-text/70;
+  }
+  .wt-item.active .wt-name,
+  .wt-item.attention .wt-name {
+    @apply text-text;
+  }
+  .wt-item.unread .wt-name {
+    @apply text-text font-bold;
+  }
+
+  mark.match {
+    @apply bg-transparent text-primary font-bold;
+  }
+
+  .mini {
+    @apply font-mono text-muted text-label;
+  }
+  .mini.ahead {
+    @apply text-primary;
+  }
+  .mini.behind {
+    @apply text-warning;
+  }
+  .mini.dirty {
+    @apply text-warning;
+  }
+  .mini.conflict {
+    @apply text-danger;
+  }
+  /* Reserve color for the row you're actually looking at — everywhere else,
+   * git-stat badges fade to the same muted gray as the rest of the row. */
+  .wt-item:not(.active) .mini.ahead,
+  .wt-item:not(.active) .mini.behind,
+  .wt-item:not(.active) .mini.dirty,
+  .wt-item:not(.active) .mini.conflict,
+  .wt-item:not(.active) .mini.stat-add,
+  .wt-item:not(.active) .mini.stat-del {
+    @apply text-muted;
+  }
+
+  /* Rounded-corner "border" is an inset box-shadow, not a real border. A real
+   * `border` + `border-radius` on a transparent/differently-colored interior
+   * anti-aliases the stroke's inner and outer edges independently, which on
+   * webkit2gtk leaves a visibly muddy, jagged corner. box-shadow paints in
+   * the same pass as the rounded-rect clip, so the curve stays clean. */
+  .btn {
+    --btn-border: var(--color-border);
+    @apply rounded-md py-1.5 px-3 text-text cursor-pointer whitespace-nowrap shrink-0 transition-[box-shadow,background,color] duration-150 inline-flex items-center justify-center;
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--btn-border);
+    font: inherit;
+    font-size: var(--text-sub);
+  }
+  .btn:hover {
+    --btn-border: var(--color-primary);
+  }
+  /* Themed focus ring instead of the browser/webkit default outline, which
+   * doesn't follow `border-radius` on this webkit2gtk and reads as a stray
+   * rectangle. Layered box-shadow (gap ring, same trick as the border above)
+   * keeps the rounded corners clean instead of switching to `outline`. */
+  .btn:focus-visible {
+    outline: none;
+    box-shadow:
+      inset 0 0 0 1px var(--btn-border),
+      0 0 0 2px var(--color-surface),
+      0 0 0 4px var(--color-primary);
+  }
+  /* Native `:active` press feedback — applied by the browser on mousedown
+   * with zero JS involved, so it can never lag behind a slow click handler
+   * (e.g. one that kicks off a real network request before its own
+   * re-render lands). This is the one guarantee that *something* visibly
+   * happens the instant a button is pressed.
+   * `:not(:disabled)` matters: WebKitGTK on this system doesn't reliably
+   * suppress `:active` on native `disabled` buttons, so a loading button
+   * (e.g. "Pushing…") kept visibly "pressing" on every repeat click without
+   * this — even though the click has no effect, it looked like it did. */
+  .btn:active:not(:disabled) {
+    transform: scale(0.97);
+    filter: brightness(0.92);
+  }
+  /* Belt-and-suspenders alongside the `:not(:disabled)` guard above: a
+   * disabled button should ignore pointer interaction entirely (no hover,
+   * no active, no click), independent of the browser's own handling of the
+   * `disabled` attribute. */
+  .btn:disabled {
+    pointer-events: none;
+  }
+
+  /* Filled mode — solid background, no visible border beyond the fill. */
+  .btn.filled {
+    --btn-border: var(--color-surface-2);
+    @apply bg-surface-2 font-semibold;
+  }
+  .btn.filled:hover {
+    --btn-border: var(--color-primary);
+  }
+  .btn.filled.primary,
+  .btn.primary {
+    --btn-border: var(--color-primary);
+    @apply bg-primary font-semibold text-text;
+  }
+  .btn.filled.primary:hover,
+  .btn.primary:hover {
+    @apply bg-primary-press;
+  }
+  .btn.filled.danger,
+  .btn.danger {
+    --btn-border: var(--color-danger);
+    @apply bg-danger font-semibold text-text;
+  }
+  .btn.filled.danger:hover,
+  .btn.danger:hover {
+    background: var(--color-primary-press);
+  }
+
+  /* Outlined mode — transparent background, border always visible. */
+  .btn.outlined.primary,
+  .btn.danger-outlined {
+    @apply bg-transparent;
+  }
+  .btn.outlined.primary {
+    --btn-border: var(--color-primary);
+    @apply text-primary;
+  }
+  .btn.outlined.primary:hover {
+    @apply bg-surface-2;
+  }
+  .btn.danger-outlined {
+    --btn-border: var(--color-danger);
+    @apply text-danger;
+  }
+  .btn.danger-outlined:hover {
+    @apply bg-surface-2;
+  }
+
+  /* Ghost mode — never shows a border, in any state. Hover gives a bg tint
+   * and brightens the icon/text instead, so icon-only buttons keep some
+   * affordance without violating "ghost has no border". */
+  .btn.ghost {
+    --btn-border: transparent;
+    @apply bg-transparent;
+  }
+  .btn.ghost:hover {
+    --btn-border: transparent;
+    @apply bg-surface-2;
+    filter: brightness(1.2);
+  }
+  .btn.ghost.danger {
+    @apply text-danger;
+  }
+  .btn.ghost.danger:hover {
+    --btn-border: transparent;
+    background: rgba(196, 72, 58, 0.12);
+    filter: brightness(1.1);
+  }
+  .btn.ghost.icon.active {
+    --btn-border: transparent;
+  }
+
+  .btn.icon {
+    @apply py-1.5 px-2;
+  }
+  .btn.icon.active {
+    --btn-border: var(--color-primary);
+    @apply text-primary bg-surface-2;
+  }
+  .btn.icon-square {
+    --btn-border: transparent;
+    @apply size-8 p-0 flex items-center justify-center;
+  }
+
+  .restart-overlay {
+    @apply absolute bottom-4 right-4 z-10;
+  }
+
+  .status-chip {
+    @apply text-label py-1 px-2 rounded-sm border border-border text-muted;
+  }
+  .status-chip.stopped {
+    color: var(--color-danger);
+    border-color: rgba(196, 72, 58, 0.4);
+    background-color: rgba(196, 72, 58, 0.12);
+  }
+  .status-chip.done {
+    color: var(--color-success);
+    border-color: rgba(143, 174, 109, 0.4);
+    background-color: rgba(143, 174, 109, 0.12);
+  }
+  .status-chip-floating {
+    @apply absolute top-2 right-2 z-10 bg-surface;
+  }
+
+  .pr-status-badge {
+    @apply border;
+  }
+  .pr-status-badge.draft {
+    color: var(--color-muted);
+    border-color: var(--color-border);
+    background-color: var(--color-surface-2);
+  }
+  .pr-status-badge.open {
+    color: var(--color-success);
+    border-color: rgba(143, 174, 109, 0.4);
+    background-color: rgba(143, 174, 109, 0.12);
+  }
+  .pr-status-badge.merged {
+    color: var(--color-decorative);
+    border-color: rgba(178, 133, 168, 0.4);
+    background-color: rgba(178, 133, 168, 0.12);
+  }
+  .pr-status-badge.closed {
+    color: var(--color-danger);
+    border-color: rgba(196, 72, 58, 0.4);
+    background-color: rgba(196, 72, 58, 0.12);
+  }
+
+  .terminals.drag-over {
+    outline: 2px solid var(--color-primary);
+    outline-offset: -2px;
+  }
+
+  .tab {
+    @apply flex items-center gap-2 py-2 px-6 bg-surface-2/40 text-muted cursor-pointer text-body rounded-t-md border-b-2 border-transparent transition-colors duration-150;
+  }
+  .tab:hover {
+    @apply text-text bg-surface-2/55;
+  }
+  .tab.active {
+    @apply text-text font-medium bg-surface-2 border-primary;
+  }
+  .tab:focus-visible {
+    outline: none;
+    border-color: var(--color-primary);
+  }
+
+  .change-sync.uncommitted {
+    @apply text-muted;
+  }
+  .change-sync.committed {
+    @apply text-warning;
+  }
+  .change-sync.pushed {
+    @apply text-success;
+  }
+  /* Small bright dot layered on the sync icon when a file's committed copy is
+   * already pushed/committed but the working tree has fresh edits — keeps the
+   * branch state visible instead of downgrading the whole icon to
+   * "uncommitted". Uses the neutral text color (not warning, which is the
+   * same amber as the "committed" square) so it stays legible on all three
+   * icon colors. */
+  .change-sync-dot {
+    @apply absolute -top-0.5 -right-0.5 block size-1.5 rounded-full;
+    background-color: var(--color-text);
+    box-shadow: 0 0 0 1.5px var(--color-surface);
+  }
+  .stat-add {
+    @apply text-success;
+  }
+  .stat-del {
+    @apply text-danger;
+  }
+
+  .diff-line {
+    @apply block whitespace-pre;
+    padding: 0 16px;
+  }
+  .diff-line.add {
+    background: rgba(143, 174, 109, 0.12);
+    color: color-mix(in srgb, var(--color-success) 55%, var(--color-text) 45%);
+  }
+  .diff-line.del {
+    background: rgba(217, 105, 79, 0.12);
+    color: color-mix(in srgb, var(--color-danger) 55%, var(--color-text) 45%);
+  }
+  .diff-line.hunk {
+    @apply text-primary;
+  }
+  .diff-line.meta {
+    @apply text-muted;
+  }
+  .diff-line.err {
+    @apply text-danger;
+    padding: 16px;
+  }
+  .diff-loading {
+    @apply block text-muted;
+    padding: 16px;
+  }
+
+  /* Syntax token colors, shared by every highlight.js consumer: the diff
+   * viewer (whose `.hljs-*` spans override the inherited add/del/ctx line
+   * color so tokens stay legible against the background tints) and markdown
+   * fenced code blocks. Untokenized text keeps its container's base color. */
+  .hljs-comment,
+  .hljs-quote {
+    color: var(--color-muted);
+    font-style: italic;
+  }
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-doctag,
+  .hljs-built_in,
+  .hljs-name,
+  .hljs-tag {
+    color: #d08770;
+  }
+  .hljs-string,
+  .hljs-regexp,
+  .hljs-addition {
+    color: var(--color-success);
+  }
+  .hljs-number,
+  .hljs-literal,
+  .hljs-boolean {
+    color: var(--color-decorative);
+  }
+  .hljs-title,
+  .hljs-title.function_,
+  .hljs-title.class_,
+  .hljs-section,
+  .hljs-function {
+    color: var(--color-warning);
+  }
+  .hljs-type,
+  .hljs-attr,
+  .hljs-attribute,
+  .hljs-property,
+  .hljs-variable,
+  .hljs-params {
+    color: #8fa4b8;
+  }
+  .hljs-meta,
+  .hljs-symbol,
+  .hljs-bullet {
+    color: var(--color-secondary);
+  }
+  .hljs-deletion {
+    color: var(--color-danger);
+  }
+  .hljs-emphasis {
+    font-style: italic;
+  }
+  .hljs-strong {
+    font-weight: 600;
+  }
+}
+
+/* Layout overrides: deliberately left OUTSIDE any @layer block. Tailwind's
+ * utility classes live in @layer utilities, which — per CSS cascade-layer
+ * rules — always wins over @layer components regardless of specificity, but
+ * loses to unlayered CSS regardless of specificity. `.app`'s own
+ * grid-template-columns rule below is likewise plain unlayered CSS, so these
+ * `body.*-collapsed .app` overrides win over it via ordinary cascade
+ * specificity (a `body.*-collapsed .app` selector beats plain `.app`), not
+ * via any layering trick. Collapse via width + overflow, not `display: none` — toggling display
+ * alongside a grid-track resize left stale sidebar pixels on screen on this
+ * webkit2gtk build (the DOM/CSS were confirmed correct — a pure compositor
+ * repaint bug). Shrinking width to 0 is an ordinary reflow WebKit already
+ * repaints correctly. */
+.app {
+  grid-template-columns: var(--sidebar-width, 20rem) minmax(480px, 1fr) var(
+      --changes-width,
+      24rem
+    );
+}
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+body.sidebar-collapsed .sidebar {
+  width: 0;
+  min-width: 0;
+  border-right: none;
+}
+body.sidebar-collapsed .app {
+  grid-template-columns: 0 minmax(480px, 1fr) var(--changes-width, 24rem);
+}
+body.changes-collapsed .changes {
+  width: 0;
+  min-width: 0;
+  border-left: none;
+}
+body.changes-collapsed .app {
+  grid-template-columns: var(--sidebar-width, 20rem) minmax(480px, 1fr) 0;
+}
+body.sidebar-collapsed.changes-collapsed .app {
+  grid-template-columns: 0 minmax(480px, 1fr) 0;
+}
+body.settings-full .sidebar,
+body.settings-full .changes,
+body.settings-full .main-head,
+body.settings-full .tab-bar {
+  display: none;
+}
+body.settings-full .app {
+  grid-template-columns: 1fr;
+}
+/* WindowControls (the fallback close button on WMs that don't draw their
+ * own decorations) is a fixed overlay pinned to the OS window's true
+ * top-right corner, independent of which pane happens to sit there. Reserve
+ * space only in whichever header row is *actually* flush against that edge
+ * right now — ChangesPane's "vs main"/Rebase/Merge row when the changes
+ * pane is open, or MainHead's head-actions when it's collapsed — so its
+ * own right-aligned content doesn't sit underneath the button. Applying
+ * this unconditionally to all three would pad MainHead's row even while
+ * ChangesPane sits to its right actually touching the edge, pushing its
+ * rightmost button (the changes-pane toggle) needlessly far from the
+ * column's real edge. 2.75rem clears the button's 2rem square hit target
+ * plus a small gap. */
+body.has-window-controls.changes-collapsed .main-head {
+  padding-right: 2.75rem;
+}
+body.has-window-controls:not(.changes-collapsed) .changes-actions,
+body.has-window-controls:not(.changes-collapsed) .changes-head {
+  padding-right: 2.75rem;
+}
+/* The settings header is flush against the window's top-right corner while
+ * `settings-full` is active (sidebar/ChangesPane/main-head/tab-bar are all
+ * hidden), so it needs the same close-button clearance as the headers above. */
+body.has-window-controls.settings-full .settings-header {
+  padding-right: 2.75rem;
+}
+/* webkit2gtk re-synthesizes :hover (and a real `mouseenter`) for whatever
+ * element the OS cursor happens to rest over the instant this window
+ * regains focus — even when focus changed with no real mouse movement at
+ * all, e.g. a WM keybind or `hyprctl dispatch focus`. Left unhandled, a
+ * hover-only control (a sidebar row's remove button crossfading with its
+ * status icon, a hover card) springs open on refocus and stays stuck open
+ * indefinitely, since nothing else clears it until the mouse genuinely
+ * moves. See `useSuspendHoverOnBlur` (App.tsx): it adds this class the
+ * instant the window loses focus and only removes it on a real
+ * `mousemove` — regaining focus alone never does. A `pointer-events: none`
+ * element can't match `:hover`, so this blocks the bogus rehover; the
+ * moment the mouse actually moves again, hover starts matching correctly
+ * against wherever the cursor currently is. */
+body.suspend-hover,
+body.suspend-hover * {
+  pointer-events: none;
+}
+/* WindowControls' close button: white icon by default, red only on hover —
+ * deliberately not the shared `ghost-danger` variant (which is red-always
+ * and used elsewhere, e.g. WorktreeRow's remove icon), so it doesn't read
+ * as a persistent warning sitting in the corner of every window. */
+.window-close-btn {
+  color: white;
+}
+.window-close-btn:hover {
+  color: var(--color-danger);
+}
+#diff-pane:not([hidden]),
+#file-pane:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+}
+#agent-pane:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Every element that xterm's FitAddon measures — i.e. the parent passed to
+ * `term.open()` — must be `box-sizing: content-box`. FitAddon sizes the
+ * terminal from `getComputedStyle(parent).height`/`.width` (xterm.js#1283),
+ * and for a `border-box` element those computed values *include* the element's
+ * padding, which FitAddon never subtracts. Tailwind preflight makes every
+ * element `border-box`, so any padded terminal container (the agent pane's
+ * `py-1.5 px-2`, the Run/Setup logs' `p-1`) made FitAddon believe it had more
+ * room than the content box really did — rounding the row (or column) count up
+ * by one whenever the size landed near a cell boundary, spilling the last row
+ * past the bottom edge (visibly clipping pi's status bar). Forcing content-box
+ * makes `getComputedStyle` report the content box, exactly what FitAddon's
+ * math assumes. Applied to: `.term-pane` (session.ts), RunPanel, and
+ * ProvisionPanel. The rendered layout is unchanged because each of these is
+ * (`absolute inset-0` with auto width/height, or a fixed height whose wrapper
+ * was moved outward) under either box model. */
+.xterm-fit {
+  box-sizing: content-box;
+}
+
+@layer components {
+  dialog {
+    @apply border border-border rounded-md bg-surface text-text p-0;
+    width: min(420px, 90vw);
+    /* Tailwind's preflight zeroes margin on `*`, which clobbers the
+       browser's built-in `dialog:modal { margin: auto }` centering rule
+       (author-origin CSS always wins over the UA stylesheet). Restore it. */
+    margin: auto;
+  }
+  dialog::backdrop {
+    background: rgba(0, 0, 0, 0.5);
+  }
+  #project-settings-dialog {
+    width: min(760px, 90vw);
+  }
+  dialog form {
+    @apply p-5 flex flex-col gap-4;
+  }
+  #settings-pane form {
+    @apply flex flex-col;
+  }
+  dialog h2 {
+    @apply m-0 text-heading;
+  }
+  /* One documented exception to the type scale, same footing as `.btn`'s
+   * shadow exception above: the full-page Settings header is a page-level
+   * title, a size up from any section `heading` — not a token to reuse
+   * elsewhere. */
+  #settings-pane h2 {
+    @apply m-0 font-bold;
+    font-size: 1.6rem;
+  }
+  /* `#settings-pane` (not this header) is the actual scroll container — see
+   * its own `overflow-auto` rule below — so `sticky` here pins the header to
+   * the top of that scroll, not the viewport. Needs its own opaque `bg-bg`
+   * (the pane's background doesn't paint "in front of" scrolled-under
+   * content) and a `z-10` above the form fields scrolling beneath it. */
+  #settings-pane .settings-header {
+    @apply pb-4 mb-0 border-b border-border bg-bg sticky top-0 z-10;
+    padding: 16px 28px 16px 20px;
+  }
+  #settings-pane .settings-esc-hint {
+    @apply ml-auto font-mono text-muted text-label border border-border rounded-sm bg-surface-2;
+    padding: 4px 6px;
+  }
+  dialog label,
+  #settings-pane label {
+    @apply flex flex-col gap-1.5 text-muted text-sub;
+  }
+  dialog input,
+  dialog textarea,
+  dialog select,
+  #settings-pane input,
+  #settings-pane textarea,
+  #settings-pane select {
+    @apply rounded-md border border-border bg-bg text-text;
+    padding: 8px 12px;
+    font: inherit;
+  }
+  dialog textarea,
+  #settings-pane textarea {
+    resize: vertical;
+  }
+  dialog select,
+  #settings-pane select {
+    appearance: none;
+    background-image:
+      linear-gradient(45deg, transparent 50%, var(--color-muted) 50%),
+      linear-gradient(135deg, var(--color-muted) 50%, transparent 50%);
+    background-position:
+      calc(100% - 18px) calc(1em + 2px),
+      calc(100% - 13px) calc(1em + 2px);
+    background-size:
+      5px 5px,
+      5px 5px;
+    background-repeat: no-repeat;
+    padding-right: 32px;
+  }
+  dialog input:focus,
+  dialog textarea:focus,
+  dialog select:focus,
+  #settings-pane input:focus,
+  #settings-pane textarea:focus,
+  #settings-pane select:focus {
+    @apply outline-none border-primary;
+  }
+  #settings-pane {
+    @apply overflow-auto bg-bg;
+  }
+  .hint {
+    @apply m-0 text-muted text-caption;
+  }
+  /* Confirmation/action dialogs bump their body copy up to the base body
+   * size — `.hint`/`.warn`/`.error`'s default caption/sub sizes read too
+   * small for text a user has to actually read before confirming a
+   * destructive action. Scoped to `dialog` so the full-page Settings
+   * surface (`#settings-pane`, not a `<dialog>`) keeps its denser type. */
+  dialog .hint,
+  dialog .warn,
+  dialog .error {
+    font-size: var(--text-body);
+  }
+  code {
+    @apply font-mono bg-surface-2 text-text rounded-sm border border-border whitespace-nowrap overflow-x-auto;
+    display: inline-block;
+    max-width: 100%;
+    padding: 1px 6px;
+    font-size: 0.92em;
+    vertical-align: -1px;
+  }
+  .error {
+    @apply m-0 text-danger text-sub;
+  }
+  .warn {
+    @apply m-0 rounded-md text-danger text-sub;
+    padding: 8px 12px;
+    background: rgba(217, 105, 79, 0.12);
+    border: 1px solid rgba(217, 105, 79, 0.35);
+  }
+  dialog .checkbox-row,
+  #settings-pane .checkbox-row {
+    @apply flex flex-row flex-nowrap items-start gap-2 text-text text-sub;
+  }
+  dialog .checkbox-row input,
+  #settings-pane .checkbox-row input {
+    @apply w-auto shrink-0 mt-1;
+  }
+  dialog menu {
+    @apply flex justify-end gap-2 m-0 p-0;
+  }
+  .resize-handle {
+    transition: background-color 120ms ease;
+  }
+  .resize-handle:hover,
+  body.resizing .resize-handle {
+    background: color-mix(in srgb, var(--color-muted) 60%, transparent);
+  }
+  .main.reselect-flash {
+    animation: reselect-flash 150ms ease-out;
+  }
+
+  .project-add-nudge {
+    animation: project-add-nudge 500ms ease-out 2;
+  }
+}

@@ -1,0 +1,143 @@
+@reference "../styles.css";
+
+/* github-markdown-css (imported by MarkdownPreview.tsx) owns the structure and
+ * typography — headings, spacing, lists, tables, task lists, footnotes. This
+ * layer does two things only:
+ *
+ *   1. sizes its box for the narrower preview pane, and
+ *   2. re-colors its hardcoded GitHub-dark palette onto corral's warm tokens
+ *      (the generated stylesheet has no CSS variables to retheme).
+ *
+ * The `.body:global(.markdown-body)` compound is deliberate: it raises
+ * specificity above the package's single-class rules so these win regardless
+ * of stylesheet order — `styles.css` loads via index.html's <link>, while the
+ * package CSS arrives through the bundle, and that order isn't worth relying
+ * on.
+ */
+.body:global(.markdown-body) {
+  /* GitHub ships a system-ui stack; pin it to the app's font so the preview
+   * doesn't fall back to whatever the Linux desktop happens to resolve. */
+  font-family: var(--font-sans);
+  color: var(--color-text);
+  background-color: transparent;
+}
+
+/* GitHub's issue/comment text size — for PR descriptions and comments, which
+ * live in denser panes than the full-page markdown view. Headings are all
+ * `em`-based, so they scale down with the base size. */
+.compact:global(.markdown-body) {
+  font-size: 14px;
+}
+
+.body:global(.markdown-body) a {
+  color: var(--color-primary);
+}
+
+/* Tailwind's preflight zeroes `list-style`, and github-markdown-css only
+ * restores it for a handful of nested combinations — so top-level bullets and
+ * numbers vanish. Reinstate the browser defaults at single-class specificity,
+ * which GitHub's own nested-list rules then override where they want to. */
+:global(.markdown-body) ul {
+  list-style-type: disc;
+}
+:global(.markdown-body) ul ul {
+  list-style-type: circle;
+}
+:global(.markdown-body) ul ul ul {
+  list-style-type: square;
+}
+:global(.markdown-body) ol {
+  list-style-type: decimal;
+}
+:global(.markdown-body) li::marker {
+  color: var(--color-text);
+}
+
+.body:global(.markdown-body) h1,
+.body:global(.markdown-body) h2 {
+  border-bottom-color: var(--color-border);
+}
+
+.body:global(.markdown-body) h6 {
+  color: var(--color-muted);
+}
+
+.body:global(.markdown-body) hr {
+  background-color: var(--color-border);
+}
+
+.body:global(.markdown-body) blockquote {
+  color: var(--color-muted);
+  border-left-color: var(--color-border);
+}
+
+.body:global(.markdown-body) mark {
+  color: var(--color-text);
+  background-color: color-mix(in srgb, var(--color-warning) 25%, transparent);
+}
+
+/* The app's global `code` rule (styles.css) styles inline code as a scrollable
+ * inline-block chip. Inside a flowing paragraph that's actively wrong: an
+ * inline-block with `overflow: auto` takes its *bottom margin edge* as its
+ * baseline (CSS 2.1 §10.8.1), so the code text rides high next to the prose.
+ * Restore GitHub's plain inline styling here. */
+.body:global(.markdown-body) code,
+.body:global(.markdown-body) tt {
+  display: inline;
+  overflow: visible;
+  max-width: none;
+  vertical-align: baseline;
+  padding: 0.2em 0.4em;
+  border: 0;
+  border-radius: 6px;
+  font-size: 85%;
+  white-space: break-spaces;
+  background-color: var(--color-surface-2);
+}
+
+/* Fenced blocks: drop the chip styling entirely so the whole block reads as
+ * one surface (GitHub's `pre` padding, not per-line padding). */
+.body:global(.markdown-body) pre code,
+.body:global(.markdown-body) pre tt {
+  display: inline;
+  overflow: visible;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  font-size: 100%;
+  line-height: inherit;
+  white-space: pre;
+  background-color: transparent;
+}
+
+.body:global(.markdown-body) pre {
+  color: var(--color-text);
+  background-color: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+}
+
+.body:global(.markdown-body) kbd {
+  color: var(--color-text);
+  background-color: var(--color-surface-2);
+  border-color: var(--color-border);
+}
+
+.body:global(.markdown-body) table th,
+.body:global(.markdown-body) table td {
+  border-color: var(--color-border);
+}
+
+.body:global(.markdown-body) table tr {
+  background-color: transparent;
+  border-top-color: var(--color-border);
+}
+
+.body:global(.markdown-body) table tr:nth-child(2n) {
+  background-color: var(--color-surface-2);
+}
+
+.body:global(.markdown-body) .footnotes {
+  color: var(--color-muted);
+  border-top-color: var(--color-border);
+}

@@ -1,0 +1,40 @@
+[package]
+name = "corral-app"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "corral — desktop UI for parallel Claude Code worktree sessions"
+
+[lib]
+# The `_lib` suffix keeps the lib name distinct from the bin name (a Windows
+# limitation; see https://github.com/rust-lang/cargo/issues/8519).
+name = "corral_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+corral-core = { workspace = true }
+base64 = { workspace = true }
+tauri = { version = "2", features = ["devtools"] }
+tauri-plugin-opener = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+portable-pty = "0.9.0"
+tauri-plugin-notification = "2.4.0"
+tauri-plugin-localhost = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-dialog = "2"
+portpicker = "0.1"
+notify = "8"
+notify-rust = "4"
+ignore = "0.4"
+parking_lot = "0.12"
+ureq = { version = "3", features = ["json"] }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

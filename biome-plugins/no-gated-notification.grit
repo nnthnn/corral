@@ -1,0 +1,8 @@
+`if ($cond) { $body }` where {
+  $cond <: contains `isPermissionGranted($_)`,
+  $body <: contains `sendNotification($_)`,
+  register_diagnostic(
+    span = $cond,
+    message = "Don't gate sendNotification() on isPermissionGranted() — Linux desktop reports 'not granted' even though the send works. Request best-effort, then always attempt the send."
+  )
+}

@@ -1,0 +1,84 @@
+/* Shared animations for the animated-icon family in `spinners.tsx`. Kept in
+ * one module (rather than a per-component sibling) because these are a
+ * cohesive set of motion primitives reused across several icons, the same
+ * way `.btn`/`.tab` are shared in the global sheet.
+ *
+ * Every animation is applied to a plain HTML `<span>` wrapper, never the
+ * `<svg>` itself — see `LassoSpinner`: webkit2gtk resolves SVG
+ * `transform-origin` / transform animations inconsistently (it renders the
+ * icon but never visibly rotates it), whereas a regular element animates
+ * reliably everywhere. */
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* A slower, heavier turn for icons whose shape (a windmill, a wheel) reads
+ * as a real object rather than an abstract progress spinner. */
+@keyframes turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes rock {
+  0%,
+  100% {
+    transform: rotate(-18deg);
+  }
+  50% {
+    transform: rotate(18deg);
+  }
+}
+
+@keyframes swing {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  30% {
+    transform: rotate(15deg);
+  }
+  70% {
+    transform: rotate(-15deg);
+  }
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(0.7);
+    opacity: 0.4;
+  }
+  50% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.spin {
+  animation: spin 1.1s linear infinite;
+  transform-origin: 50% 50%;
+}
+
+.turn {
+  animation: turn 3.2s linear infinite;
+  transform-origin: 50% 50%;
+}
+
+.rock {
+  animation: rock 1.1s ease-in-out infinite;
+  transform-origin: 50% 50%;
+}
+
+.swing {
+  animation: swing 1.3s ease-in-out infinite;
+  transform-origin: 50% 8%;
+}
+
+.breathe {
+  animation: breathe 1.4s ease-in-out infinite;
+  transform-origin: 50% 50%;
+}

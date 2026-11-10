@@ -1,0 +1,67 @@
+[workspace]
+resolver = "2"
+members = ["src-tauri", "crates/corral-core", "crates/corral-cli"]
+
+[workspace.package]
+version = "0.4.0"
+edition = "2024"
+authors = ["corral contributors"]
+license = "MIT"
+repository = "https://github.com/nnthnn/corral"
+
+# sccache can't cache incremental compilation units — they bypass the cache
+# entirely and fall through to an uncached rustc invocation. Disabling
+# incremental here (the officially supported switch; CARGO_INCREMENTAL via
+# .cargo/config.toml's [env] table does NOT work — that table only injects
+# vars into build-script/rustc subprocess environments, not cargo's own
+# profile resolution) routes every compile through sccache, which is what
+# lets identical dependency builds cache-share across worktrees.
+[profile.dev]
+incremental = false
+
+[profile.test]
+incremental = false
+
+[workspace.dependencies]
+corral-core = { path = "crates/corral-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+rand = "0.8"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+base64 = "0.22"
+
+# https://github.com/nnthnn/tauri-patched (fork of tauri-v2.11.4, branch
+# corral-origin-patch) carries two Linux-only fixes over upstream,
+# both in CLAUDE.md and this file's git history for the full story —
+# confirmed 2026-07-14 that both are still unfixed on tauri's `dev` branch:
+#   1. crates/tauri/src/ipc/protocol.rs: webkit2gtk on this system sends a
+#      missing/unparseable `Origin` header on the `ipc://` IPC fetch, which
+#      upstream hard-rejects. Falls back to the app's local protocol URL
+#      instead of rejecting the request.
+#   2. crates/tauri/scripts/ipc-protocol.js: webkit2gtk's `ipc://` custom-
+#      protocol fetch adds tens of ms of latency per invoke() call (measured:
+#      10-50ms typical, spiking to 150ms, for single-keystroke terminal
+#      writes) vs. the postMessage transport, which has full feature parity
+#      on this platform. Forces Linux onto postMessage unconditionally
+#      instead of only falling back to it when the fetch throws.
+#
+# https://github.com/nnthnn/wry-patched (fork of wry-v0.55.1, branch
+# corral-origin-patch) carries one
+# more fix needed because of (2) above — also confirmed still unfixed on
+# wry's `dev` branch: once Linux always uses postMessage, wry's
+# `attach_ipc_handler` stamps every IPC request with `WebView::uri()` at
+# message-received time — but webkit2gtk can still report "about:blank" for a
+# short window after the real page's DOM has already loaded, so early
+# invoke() calls (e.g. on DOMContentLoaded) get rejected by Tauri's ACL as
+# coming from an unrecognized origin. Falls back to the webview's
+# originally-configured target URL when uri() is "about:blank".
+#
+# `rev` pins to the exact commit so CI (and everyone's local build) stays
+# reproducible even if the branch is force-pushed later; bump both the rev
+# here and the fork's remote together.
+[patch.crates-io]
+tauri = { git = "https://github.com/nnthnn/tauri-patched", rev = "d03f2db" }
+wry = { git = "https://github.com/nnthnn/wry-patched", rev = "477a0fd" }

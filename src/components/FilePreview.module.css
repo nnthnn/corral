@@ -1,0 +1,43 @@
+@reference "../styles.css";
+
+/* The File pane hosts a rendered markdown body as a full-height scroll region;
+ * `MarkdownPreview` itself is layout-agnostic so the PR pane can reuse it. */
+.markdownPreview {
+  @apply flex-1 min-h-0 overflow-auto;
+  padding: 40px 48px;
+}
+
+/* Centered, fit-to-view canvas for a rendered image (raster or SVG). The
+ * subtle checkerboard uses the two nearest surface tokens so transparent
+ * PNGs/GIFs/SVGs read as transparent without shouting — this is still a
+ * scanning surface, not an editor canvas. */
+.imageBody {
+  @apply flex flex-1 min-h-0 items-center justify-center overflow-hidden p-4;
+  background-color: var(--color-surface);
+  background-image:
+    linear-gradient(
+      45deg,
+      var(--color-surface-2) 25%,
+      transparent 25%,
+      transparent 75%,
+      var(--color-surface-2) 75%
+    ),
+    linear-gradient(
+      45deg,
+      var(--color-surface-2) 25%,
+      transparent 25%,
+      transparent 75%,
+      var(--color-surface-2) 75%
+    );
+  background-position:
+    0 0,
+    8px 8px;
+  background-size: 16px 16px;
+}
+
+/* Contain, never upscale past natural size for rasters, but let SVGs (which
+ * may only declare a viewBox) scale to the box. `max-*` handles both without
+ * `object-fit` upscaling small icons into blur. */
+.image {
+  @apply max-h-full max-w-full object-contain;
+}

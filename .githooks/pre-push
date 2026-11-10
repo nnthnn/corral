@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Fast verification before code leaves the machine: formatting, lints, and a
+# compile check. Full `just ci` (tests + frontend build) already reruns
+# remotely via GitHub Actions on push/PR — duplicating the slow parts here
+# just makes every push silently block for minutes. Installed via
+# `just install-hooks`.
+#
+# `git push` sets GIT_DIR (and friends) in this hook's environment so *it*
+# can operate on the right repo/worktree. Left alone, that leaks into every
+# `git` subprocess we spawn below — including corral-core's own test suite,
+# which shells out to real `git init`/`git commit` inside tempdirs. With
+# GIT_DIR pointing at this worktree's real gitdir, those test commands
+# operate on the actual checked-out branch instead of the tempdir, silently
+# corrupting it with test-fixture commits. Unset before doing anything else.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_OBJECT_DIRECTORY \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+just fmt-check lint check

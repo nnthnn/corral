@@ -1,0 +1,126 @@
+@reference "../styles.css";
+
+@keyframes save-pop {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.06);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes save-tint {
+  0% {
+    background-color: var(--color-primary);
+  }
+  25% {
+    background-color: var(--color-success);
+  }
+  100% {
+    background-color: var(--color-primary);
+  }
+}
+
+@keyframes check-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes save-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-4px);
+  }
+  40% {
+    transform: translateX(4px);
+  }
+  60% {
+    transform: translateX(-3px);
+  }
+  80% {
+    transform: translateX(3px);
+  }
+}
+
+.form {
+  @apply flex flex-col;
+}
+
+.body {
+  @apply w-full flex flex-col gap-4;
+  padding: 20px;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+}
+
+@media (max-width: 1080px) {
+  .columns {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+.column {
+  @apply flex flex-col gap-4;
+}
+
+.column :global(.hint) + label,
+.column :global(.warn) + label {
+  margin-top: 0.5rem;
+}
+
+.columnHeading {
+  @apply m-0 text-text font-semibold text-heading;
+}
+
+.saveBtn {
+  @apply inline-flex items-center gap-2 text-body;
+  padding: 8px 20px;
+}
+
+.saveBtnError {
+  animation: save-shake 0.4s ease-in-out;
+}
+
+.saveBtnSuccess {
+  animation:
+    save-pop 300ms ease-out,
+    save-tint 900ms ease-out;
+}
+
+.checkIcon {
+  animation: check-pop 300ms ease-out;
+}
+
+.soundRow {
+  @apply flex items-center gap-2;
+}
+
+.soundRow select {
+  flex: 1;
+}

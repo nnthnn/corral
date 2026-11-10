@@ -1,0 +1,7 @@
+`className={$expr}` where {
+  $expr <: contains `$a + $b`,
+  register_diagnostic(
+    span = $expr,
+    message = "Use clsx() instead of string concatenation to build className."
+  )
+}
