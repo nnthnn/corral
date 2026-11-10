@@ -44,7 +44,8 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - uses: extractions/setup-just@v2
+      # v4 is a composite action; v2 was a Node 20 JS action (deprecated runtime).
+      - uses: extractions/setup-just@v4
 
       # Mirrors `just ci` (fmt-check lint check frontend test) so local and
       # CI verification never drift apart.
