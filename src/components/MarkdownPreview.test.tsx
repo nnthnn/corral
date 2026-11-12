@@ -113,4 +113,22 @@ describe("MarkdownPreview", () => {
       path: "docs/img/shot.png",
     });
   });
+
+  it("inlines a relative SVG, which the backend returns as text", async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"></svg>';
+    vi.mocked(invoke).mockResolvedValue({ kind: "text", text: svg });
+    const { container } = render(
+      <MarkdownPreview
+        wt={wt}
+        path="README.md"
+        text={'<p align="center"><img src="design/logo/mark.svg"></p>'}
+      />,
+    );
+    await waitFor(() =>
+      expect(container.querySelector("img")).toHaveAttribute(
+        "src",
+        `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,
+      ),
+    );
+  });
 });

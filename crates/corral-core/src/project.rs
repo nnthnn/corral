@@ -93,6 +93,11 @@ const SCAN_MAX_DEPTH: usize = 3;
 /// (gitignore-aware, so `node_modules`/`target`/`dist` are skipped for free)
 /// up to [`SCAN_MAX_DEPTH`], and pick the most icon-like image file by
 /// filename, then shallowest, then smallest.
+///
+/// "Mark" outranks "logo" because the two are different assets: a mark is
+/// the compact symbol (usually square, so it survives the sidebar's square
+/// crop), while a logo is often a wide horizontal lockup. `wordmark` is
+/// explicitly excluded — it's the text half of a lockup, not a symbol.
 fn scan_for_icon(repo: &Path) -> Option<PathBuf> {
     let mut best: Option<(u8, usize, u64, PathBuf)> = None;
 
@@ -133,10 +138,12 @@ fn scan_for_icon(repo: &Path) -> Option<PathBuf> {
             .to_ascii_lowercase();
         let score: u8 = if name.contains("icon") {
             0
-        } else if name.contains("logo") {
+        } else if name.contains("mark") && !name.contains("wordmark") {
             1
-        } else {
+        } else if name.contains("logo") {
             2
+        } else {
+            3
         };
         let depth = entry.depth();
         let key = (score, depth, meta.len());
@@ -230,6 +237,26 @@ mod tests {
 
         let path = scan_for_icon(dir.path()).unwrap();
         assert_eq!(path.file_name().unwrap(), "icon.png");
+    }
+
+    #[test]
+    fn scan_prefers_mark_named_file_over_wide_logo() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "design/logo/brand-logo-on-dark.svg", b"<svg/>");
+        write(dir.path(), "design/logo/brand-mark.svg", b"<svg/>");
+
+        let path = scan_for_icon(dir.path()).unwrap();
+        assert_eq!(path.file_name().unwrap(), "brand-mark.svg");
+    }
+
+    #[test]
+    fn scan_does_not_treat_wordmark_as_a_mark() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "assets/brand-wordmark.svg", b"<svg/>");
+        write(dir.path(), "assets/brand-logo.svg", b"<svg/>");
+
+        let path = scan_for_icon(dir.path()).unwrap();
+        assert_eq!(path.file_name().unwrap(), "brand-logo.svg");
     }
 
     #[test]

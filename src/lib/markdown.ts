@@ -9,7 +9,7 @@
 import DOMPurify from "dompurify";
 import { Marked } from "marked";
 import type { Worktree } from "../types";
-import { imageDataUrl } from "./files";
+import { imageDataUrl, isSvgPath, svgDataUrl } from "./files";
 import { highlightCode } from "./highlight";
 import { invoke } from "./tauri";
 
@@ -114,6 +114,11 @@ export async function resolveMarkdownImages(
         });
         if (content.kind === "image") {
           img.setAttribute("src", imageDataUrl(content.mime, content.data));
+        } else if (content.kind === "text" && isSvgPath(path)) {
+          // SVG comes back as text (it's a text format — see `read_file`),
+          // so it doesn't satisfy `kind === "image"`. Encode the source
+          // ourselves, same as the File preview does.
+          img.setAttribute("src", svgDataUrl(content.text));
         }
       } catch {
         // Leave the original (broken) src in place.
