@@ -16,19 +16,47 @@ pub(crate) fn detect_run_command(cwd: &Path) -> Option<String> {
         .or_else(|| detect_from_pyproject(cwd))
 }
 
-enum PackageManager {
+/// Which package manager a project uses, inferred from its lockfile. Shared
+/// with `run_targets`, which builds the `pnpm run <script>`-style commands for
+/// the Run tab's script chips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PackageManager {
     Pnpm,
     Yarn,
     Npm,
+    Bun,
 }
 
-fn package_manager(cwd: &Path) -> PackageManager {
-    if cwd.join("pnpm-lock.yaml").is_file() {
-        PackageManager::Pnpm
-    } else if cwd.join("yarn.lock").is_file() {
-        PackageManager::Yarn
-    } else {
-        PackageManager::Npm
+impl PackageManager {
+    pub(crate) fn detect(cwd: &Path) -> Self {
+        if cwd.join("pnpm-lock.yaml").is_file() {
+            Self::Pnpm
+        } else if cwd.join("yarn.lock").is_file() {
+            Self::Yarn
+        } else if cwd.join("bun.lockb").is_file() || cwd.join("bun.lock").is_file() {
+            Self::Bun
+        } else {
+            Self::Npm
+        }
+    }
+
+    /// The program name, shown as the Run tab target row's prefix label.
+    pub(crate) fn program(self) -> &'static str {
+        match self {
+            Self::Pnpm => "pnpm",
+            Self::Yarn => "yarn",
+            Self::Npm => "npm",
+            Self::Bun => "bun",
+        }
+    }
+
+    pub(crate) fn run_command(self, script: &str) -> String {
+        match self {
+            Self::Pnpm => format!("pnpm run {script}"),
+            Self::Yarn => format!("yarn {script}"),
+            Self::Npm => format!("npm run {script}"),
+            Self::Bun => format!("bun run {script}"),
+        }
     }
 }
 
@@ -43,11 +71,7 @@ fn detect_from_package_json(cwd: &Path) -> Option<String> {
     } else {
         return None;
     };
-    Some(match package_manager(cwd) {
-        PackageManager::Pnpm => format!("pnpm run {script}"),
-        PackageManager::Yarn => format!("yarn {script}"),
-        PackageManager::Npm => format!("npm run {script}"),
-    })
+    Some(PackageManager::detect(cwd).run_command(script))
 }
 
 fn detect_from_cargo_toml(cwd: &Path) -> Option<String> {

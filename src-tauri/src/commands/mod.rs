@@ -1,10 +1,10 @@
-pub mod just_targets;
 pub mod project_settings;
 pub mod projects;
 pub mod provision;
 pub mod pty_process;
 pub mod run;
 pub mod run_detect;
+pub mod run_targets;
 pub mod session;
 pub mod settings;
 pub mod system;

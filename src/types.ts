@@ -224,13 +224,23 @@ export interface RunState {
   exit_code: number | null;
 }
 
-/** One public `justfile` recipe, listed by `list_just_targets` for the Run
- * tab's one-click target buttons. */
-export interface JustTarget {
-  name: string;
-  /** Recipe doc comment, used as the button's tooltip. */
+/** One clickable Run-tab target: a public `justfile` recipe or a
+ * `package.json` script, listed by `list_run_targets`. */
+export interface RunTarget {
+  /** Chip text (`build`). */
+  label: string;
+  /** What ▶ actually runs (`just build`, `pnpm run build`). */
+  command: string;
+  /** Recipe doc comment, or the package script's body. Button tooltip. */
   doc: string | null;
   /** Parameters with no default — clicking this target prefills the command
-   * instead of running it, since `just <name>` would fail without them. */
+   * instead of running it. Empty for package scripts. */
   required_params: string[];
+}
+
+/** The Run tab's target row: which source it came from (the row's prefix
+ * label: `just`, `pnpm`, `yarn`, `npm`, `bun`) plus the targets themselves. */
+export interface RunTargets {
+  source: string | null;
+  targets: RunTarget[];
 }

@@ -203,14 +203,27 @@ describe("RunPanel", () => {
     });
   });
 
-  it("lists justfile targets and runs one on click", async () => {
+  it("lists run targets and runs one on click", async () => {
     vi.mocked(invoke).mockImplementation((cmd) => {
       if (cmd === "resolve_run_command") return Promise.resolve("");
-      if (cmd === "list_just_targets") {
-        return Promise.resolve([
-          { name: "dev", doc: "start the dev server", required_params: [] },
-          { name: "test", doc: null, required_params: [] },
-        ]);
+      if (cmd === "list_run_targets") {
+        return Promise.resolve({
+          source: "just",
+          targets: [
+            {
+              label: "dev",
+              command: "just dev",
+              doc: "start the dev server",
+              required_params: [],
+            },
+            {
+              label: "test",
+              command: "just test",
+              doc: null,
+              required_params: [],
+            },
+          ],
+        });
       }
       return Promise.resolve(undefined);
     });
@@ -218,6 +231,7 @@ describe("RunPanel", () => {
 
     const dev = await screen.findByRole("button", { name: "dev" });
     expect(screen.getByRole("button", { name: "test" })).toBeInTheDocument();
+    expect(screen.getByText("just")).toBeInTheDocument();
     expect(dev).toHaveAttribute("title", "just dev — start the dev server");
     expect(dev).not.toHaveClass(styles.selected);
 
@@ -236,14 +250,68 @@ describe("RunPanel", () => {
     expect(dev).toHaveClass(styles.selected);
   });
 
+  it("runs package.json scripts through the detected package manager", async () => {
+    vi.mocked(invoke).mockImplementation((cmd) => {
+      if (cmd === "resolve_run_command") return Promise.resolve("");
+      if (cmd === "list_run_targets") {
+        return Promise.resolve({
+          source: "pnpm",
+          targets: [
+            {
+              label: "build",
+              command: "pnpm run build",
+              doc: "tsc && vite build",
+              required_params: [],
+            },
+          ],
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+    render(<RunPanel wt={wt} />);
+
+    const build = await screen.findByRole("button", { name: "build" });
+    expect(screen.getByText("pnpm")).toBeInTheDocument();
+    expect(build).toHaveAttribute(
+      "title",
+      "pnpm run build — tsc && vite build",
+    );
+
+    fireEvent.click(build);
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("start_run", {
+        project: "corral",
+        feature: "weeding",
+        command: "pnpm run build",
+      }),
+    );
+    expect(screen.getByPlaceholderText("e.g. pnpm dev")).toHaveValue(
+      "pnpm run build",
+    );
+  });
+
   it("moves the highlight to the most recently clicked target", async () => {
     vi.mocked(invoke).mockImplementation((cmd) => {
       if (cmd === "resolve_run_command") return Promise.resolve("");
-      if (cmd === "list_just_targets") {
-        return Promise.resolve([
-          { name: "deploy", doc: null, required_params: ["env"] },
-          { name: "release", doc: null, required_params: ["version"] },
-        ]);
+      if (cmd === "list_run_targets") {
+        return Promise.resolve({
+          source: "just",
+          targets: [
+            {
+              label: "deploy",
+              command: "just deploy",
+              doc: null,
+              required_params: ["env"],
+            },
+            {
+              label: "release",
+              command: "just release",
+              doc: null,
+              required_params: ["version"],
+            },
+          ],
+        });
       }
       return Promise.resolve(undefined);
     });
@@ -264,10 +332,18 @@ describe("RunPanel", () => {
   it("prefills instead of running a target that needs parameters", async () => {
     vi.mocked(invoke).mockImplementation((cmd) => {
       if (cmd === "resolve_run_command") return Promise.resolve("");
-      if (cmd === "list_just_targets") {
-        return Promise.resolve([
-          { name: "deploy", doc: null, required_params: ["env"] },
-        ]);
+      if (cmd === "list_run_targets") {
+        return Promise.resolve({
+          source: "just",
+          targets: [
+            {
+              label: "deploy",
+              command: "just deploy",
+              doc: null,
+              required_params: ["env"],
+            },
+          ],
+        });
       }
       return Promise.resolve(undefined);
     });
@@ -284,15 +360,25 @@ describe("RunPanel", () => {
     expect(invoke).not.toHaveBeenCalledWith("start_run", expect.anything());
   });
 
-  it("disables justfile targets while a run is in progress", async () => {
+  it("disables targets while a run is in progress", async () => {
     useStore.setState({
       run: new Map([
         ["corral/weeding", { output: [104], running: true, exit_code: null }],
       ]),
     });
     vi.mocked(invoke).mockImplementation((cmd) =>
-      cmd === "list_just_targets"
-        ? Promise.resolve([{ name: "dev", doc: null, required_params: [] }])
+      cmd === "list_run_targets"
+        ? Promise.resolve({
+            source: "just",
+            targets: [
+              {
+                label: "dev",
+                command: "just dev",
+                doc: null,
+                required_params: [],
+              },
+            ],
+          })
         : Promise.resolve(undefined),
     );
     render(<RunPanel wt={wt} />);

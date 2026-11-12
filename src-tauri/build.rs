@@ -53,7 +53,7 @@ fn main() {
             "get_run_output",
             "resize_run",
             "resolve_run_command",
-            "list_just_targets",
+            "list_run_targets",
         ]),
     ))
     .expect("failed to run tauri-build");

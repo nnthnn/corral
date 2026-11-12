@@ -68,6 +68,6 @@
     "allow-get-run-output",
     "allow-resize-run",
     "allow-resolve-run-command",
-    "allow-list-just-targets"
+    "allow-list-run-targets"
   ]
 }
