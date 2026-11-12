@@ -263,6 +263,21 @@ so `cfg(target_os = "macos")` code gets compiled before a release.
   per-platform. The `[patch.crates-io]` tauri/wry forks can't be target-gated
   (Cargo has no per-target `[patch]`), so they apply everywhere, but their
   fixes are Linux-only at runtime.
+- **A GUI-launched corral doesn't inherit the user's shell environment.**
+  macOS apps started from Finder/Dock/`open` get launchd's minimal env, not
+  `~/.zprofile`/`~/.zshrc` — so `PATH` has no Homebrew/pnpm/nvm entries and
+  exported vars (`ANTHROPIC_API_KEY`, …) are missing, which is what made Run
+  commands fail on a fresh Mac install. `corral_core::shell_env` runs the
+  login+interactive shell once at startup (`login_shell()` reads the passwd
+  entry like Terminal.app, `-l -i -c`, `env -0` with a newline fallback for
+  macOS < 13) and merges the result into corral's own process environment
+  *before* the Tauri builder starts any threads — `std::env::set_var` is
+  unsafe in edition 2024, so that ordering is load-bearing. Existing vars win
+  (so `CORRAL_CONFIG_DIR` from `just run-dev` survives); `PATH` is the one
+  exception, taking the shell's value with app-only entries appended. Don't
+  swap this for `fix-path-env`'s `fix_all_vars()`, which overwrites
+  `CORRAL_CONFIG_DIR` and friends. Only wired up on macOS; Linux `.desktop`
+  launches have the same gap and could enable the same call.
 - **Bundled builds need webkit2gtk workarounds on this system (CachyOS
   rolling release, `webkit2gtk-4.1 2.52.x`).** Two separate upstream bugs,
   both worked around, both required to get past a blank white
