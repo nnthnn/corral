@@ -29,6 +29,7 @@ pub mod project;
 pub mod project_create;
 pub mod project_settings;
 pub mod settings;
+pub mod shell_env;
 pub mod watch;
 pub mod worktree;
 pub mod worktree_notes;
