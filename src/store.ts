@@ -12,7 +12,7 @@ import type {
   Settings,
   Worktree,
 } from "./types";
-import { wtId } from "./utils";
+import { matchesWorktreeFilter, orderedWorktreeIds, wtId } from "./utils";
 
 export const DEFAULT_SETTINGS: Settings = {
   editor_command: "zeditor",
@@ -327,6 +327,21 @@ export function sessionStatus(
   }
   if (!sess.waiting) return { cls: "working", label: "working" };
   return { cls: "waiting", label: "waiting at the gate" };
+}
+
+/** Ids of the worktree rows the sidebar is currently showing, in the exact
+ * order it renders them (custom project order, then the text / attention
+ * filter). Single source of truth for `Ctrl+1–9`, `Ctrl+[`/`]`, and the
+ * hold-Ctrl shortcut hint. */
+export function visibleWorktreeIds(s: AppState): string[] {
+  return orderedWorktreeIds(
+    s.worktrees,
+    s.projects,
+    s.settings.project_order,
+    (wt) =>
+      matchesWorktreeFilter(wt, s.filterText) &&
+      (!s.attentionOnly || wantsAttention(s, wtId(wt))),
+  );
 }
 
 /** A backgrounded, waiting agent wants your attention — shared by the fading

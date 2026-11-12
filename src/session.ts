@@ -32,6 +32,40 @@ export interface Attach {
   buffer: number[];
 }
 
+/** Whether the user's caret currently sits in a text-entry surface that is
+ * NOT the terminal (sidebar note editor, command palette, a dialog field).
+ * `show()` skips its focus grab while that's true, so a background session
+ * event can't pull the caret away mid-sentence. `termsEl` is checked so
+ * xterm's own hidden textarea (inside the terminal container) still counts as
+ * terminal focus — switching worktrees must keep moving focus to the new
+ * terminal. */
+function isForeignTextEntryFocused(termsEl: HTMLElement): boolean {
+  // Any open native dialog owns the keyboard, even when focus is momentarily
+  // on its backdrop rather than a field.
+  if (document.querySelector("dialog[open]")) return true;
+  const el = document.activeElement;
+  if (!el) return false;
+  if (termsEl.contains(el)) return false;
+  if (el instanceof HTMLInputElement) {
+    // Buttons/checks/ranges aren't text entry — focusing the terminal after
+    // clicking one of those is still the expected behavior.
+    return ![
+      "button",
+      "submit",
+      "reset",
+      "checkbox",
+      "radio",
+      "range",
+      "file",
+      "color",
+    ].includes(el.type);
+  }
+  if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+    return true;
+  }
+  return el instanceof HTMLElement && el.isContentEditable;
+}
+
 interface OutputEvent {
   id: string;
   /** Base64-encoded PTY bytes (see `base64_bytes` in the backend) — decoded
@@ -404,7 +438,10 @@ export class SessionManager {
     }
     requestAnimationFrame(() => {
       this.fitActive();
-      this.entries.get(id)?.term.focus();
+      // Don't steal the caret from a note editor, palette, or dialog field —
+      // e.g. when `running` flips because the selected agent just exited.
+      if (!isForeignTextEntryFocused(this.termsEl))
+        this.entries.get(id)?.term.focus();
     });
   }
 

@@ -1,8 +1,7 @@
 import { useEffect } from "react";
 import { closeTab, selectWorktree } from "../lib/actions";
 import { toggleSetting } from "../lib/settings";
-import { useStore, worktreeTabIds } from "../store";
-import { wtId } from "../utils";
+import { useStore, visibleWorktreeIds, worktreeTabIds } from "../store";
 
 const MIN_DIFF_FONT_SIZE = 8;
 const MAX_DIFF_FONT_SIZE = 32;
@@ -43,16 +42,17 @@ function handleShortcut(e: KeyboardEvent): void {
 
   if (!e.shiftKey && e.key >= "1" && e.key <= "9") {
     const idx = Number(e.key) - 1;
-    if (idx >= s.worktrees.length) return;
+    const ids = visibleWorktreeIds(s);
+    if (idx >= ids.length) return;
     e.preventDefault();
-    selectWorktree(wtId(s.worktrees[idx]));
+    selectWorktree(ids[idx]);
     return;
   }
 
   if (e.key === "[" || e.key === "]") {
-    if (!s.worktrees.length) return;
+    const ids = visibleWorktreeIds(s);
+    if (!ids.length) return;
     e.preventDefault();
-    const ids = s.worktrees.map(wtId);
     const curIdx = ids.indexOf(s.selectedId ?? "");
     const delta = e.key === "[" ? -1 : 1;
     const nextIdx =

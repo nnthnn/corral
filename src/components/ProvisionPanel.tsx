@@ -3,6 +3,7 @@ import type { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { RotateCw, Square } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { drainOutput } from "../lib/output-buffer";
 import { invoke } from "../lib/tauri";
 import { attachCopyOnCtrlC, createLinkedTerminal } from "../lib/terminal";
 import { showError } from "../lib/toasts";
@@ -50,6 +51,9 @@ export function ProvisionPanel({ wt }: { wt: Worktree }) {
     invoke("get_provision_output", { key: id })
       .then((fetched) => {
         if (!fetched) return;
+        // Live events can create the entry while this fetch is in flight;
+        // installing the older snapshot would clobber the bytes they added.
+        if (useStore.getState().provisioning.has(id)) return;
         const provisioning = new Map(useStore.getState().provisioning);
         provisioning.set(id, fetched);
         useStore.setState({ provisioning });
@@ -84,19 +88,16 @@ export function ProvisionPanel({ wt }: { wt: Worktree }) {
     }
 
     const entry = termRef.current;
-    const output = state?.output;
-    if (!output) return;
-    // A shrink (e.g. `handleRerun` resetting to `output: []`) means a fresh
-    // run started, so clear the terminal and start over.
-    if (output.length < entry.written) {
-      entry.term.reset();
-      entry.written = 0;
-    }
-    if (output.length > entry.written) {
-      entry.term.write(new Uint8Array(output.slice(entry.written)));
-      entry.written = output.length;
-    }
-  }, [id, state?.output]);
+    if (!state) return;
+    // Cursor-based, not length-based: the retained buffer is front-trimmed at
+    // its cap (see `output-buffer.ts`), so its length stops growing even
+    // while new output keeps arriving. `drainOutput` also reports a rewind
+    // (a fresh run replacing the buffer), which clears the terminal.
+    const delta = drainOutput(state, entry.written);
+    if (delta.reset) entry.term.reset();
+    if (delta.data.length > 0) entry.term.write(new Uint8Array(delta.data));
+    entry.written = delta.next;
+  }, [id, state]);
 
   // A plain `window resize` listener misses the case that actually bit the
   // Run panel: this tab's pane is mounted while hidden (`display: none`)
@@ -133,7 +134,19 @@ export function ProvisionPanel({ wt }: { wt: Worktree }) {
 
   const title = setupTitle(hasCommand, state);
 
+  /** Clear the log before a fresh run. Resetting the cursor here (rather than
+   * only reacting to the empty state) means the replay effect writes the new
+   * run's first output from the beginning even if bytes arrive before React
+   * re-renders. */
+  function resetLog() {
+    const entry = termRef.current;
+    if (!entry) return;
+    entry.term.reset();
+    entry.written = 0;
+  }
+
   async function handleRerun() {
+    resetLog();
     const provisioning = new Map(useStore.getState().provisioning);
     provisioning.set(id, { output: [], running: true, exit_code: null });
     useStore.setState({ provisioning });

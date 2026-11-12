@@ -55,6 +55,40 @@ describe("WorktreeRow", () => {
     expect(document.querySelector(".sess-dot")).toBeNull();
   });
 
+  it("replaces the feature-status icon with the shortcut number while Ctrl is held", () => {
+    const status: GitStatus = {
+      branch: "feat/churning",
+      ahead: 0,
+      behind: 0,
+      staged: 0,
+      modified: 0,
+      untracked: 0,
+      added: 0,
+      removed: 0,
+      conflicts: 0,
+      commits_ahead_of_base: 0,
+      merged_into_base: true,
+      conflicts_with_base: false,
+      has_remote: false,
+      last_commit_message: "",
+      last_commit_time: 0,
+      base_added: 0,
+      base_removed: 0,
+    };
+    render(
+      <WorktreeRow
+        wt={wt(status)}
+        filterText=""
+        active={false}
+        onSelect={vi.fn()}
+        onRemove={vi.fn()}
+        shortcutNumber={3}
+      />,
+    );
+    expect(screen.queryByTitle("Merged")).not.toBeInTheDocument();
+    expect(screen.getByTitle("Ctrl+3")).toHaveTextContent("3");
+  });
+
   it("shows the pr_open dot when the backend poll has cached an open PR", () => {
     const status: GitStatus = {
       branch: "feat/churning",

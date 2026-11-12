@@ -579,3 +579,57 @@ describe("SessionManager opencode2 update hint", () => {
     expect(hintToasts()).toHaveLength(2);
   });
 });
+
+describe("SessionManager focus", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    listeners.clear();
+    attachSession.mockReset();
+    attachSession.mockResolvedValue({ info: {}, buffer: [] });
+    resizeSession.mockClear();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+  });
+
+  it("focuses the terminal when nothing else is being typed into", async () => {
+    const mgr = new SessionManager({ container, fontSize: 13 });
+    await mgr.show("corral/hulling");
+    const term = FakeTerminal.instances[FakeTerminal.instances.length - 1];
+    await vi.waitFor(() => expect(term?.focus).toHaveBeenCalled());
+  });
+
+  it("does not steal focus from a text field", async () => {
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.focus();
+
+    const mgr = new SessionManager({ container, fontSize: 13 });
+    await mgr.show("corral/hulling");
+    const term = FakeTerminal.instances[FakeTerminal.instances.length - 1];
+
+    // Give the requestAnimationFrame callback time to run, then assert it
+    // stayed hands-off.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(term?.focus).not.toHaveBeenCalled();
+
+    input.remove();
+  });
+
+  it("still moves focus to the new terminal when the previous one had it", async () => {
+    const mgr = new SessionManager({ container, fontSize: 13 });
+    await mgr.show("corral/hulling");
+
+    // xterm focuses its own hidden textarea inside the terminal container;
+    // that must not read as a foreign text field, or switching worktrees
+    // would leave keystrokes going to the old (now hidden) session.
+    const xtermFocus = document.createElement("textarea");
+    container.appendChild(xtermFocus);
+    xtermFocus.focus();
+
+    await mgr.show("corral/milking");
+    const next = FakeTerminal.instances[FakeTerminal.instances.length - 1];
+    await vi.waitFor(() => expect(next?.focus).toHaveBeenCalled());
+    xtermFocus.remove();
+  });
+});

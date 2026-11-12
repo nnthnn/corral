@@ -3,6 +3,7 @@ import { Plus, Settings } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import buckIcon from "../assets/buck/buck-icon.png";
 import buckPointing from "../assets/buck/buck-pointing.png";
+import { useCtrlHoldHint } from "../hooks/useCtrlHoldHint";
 import { selectWorktree } from "../lib/actions";
 import { showError } from "../lib/toasts";
 import {
@@ -12,13 +13,13 @@ import {
   setProjectOrder,
   toggleGroup,
 } from "../lib/worktrees";
-import { useStore, wantsAttention } from "../store";
+import { useStore, visibleWorktreeIds, wantsAttention } from "../store";
 import type { Worktree } from "../types";
 import {
+  matchesWorktreeFilter,
   moveProject,
   orderProjects,
   reorderProjects,
-  worktreeTitle,
   wtId,
 } from "../utils";
 import { Button } from "./Button";
@@ -27,16 +28,6 @@ import { ProjectIcon } from "./ProjectIcon";
 import { WorktreeRow } from "./WorktreeRow";
 
 type DragOver = { project: string; side: "before" | "after" };
-
-function matchesFilter(wt: Worktree, filterText: string): boolean {
-  if (!filterText) return true;
-  return (
-    wt.project.toLowerCase().includes(filterText) ||
-    worktreeTitle(wt).toLowerCase().includes(filterText) ||
-    wt.feature.toLowerCase().includes(filterText) ||
-    wt.branch.toLowerCase().includes(filterText)
-  );
-}
 
 export function WorktreeTree() {
   const worktrees = useStore((s) => s.worktrees);
@@ -53,6 +44,9 @@ export function WorktreeTree() {
   useStore((s) => s.sessions);
   const [draggingProject, setDraggingProject] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<DragOver | null>(null);
+  // Reveals each row's `Ctrl+N` number while Ctrl is held — see
+  // `useCtrlHoldHint`.
+  const shortcutHints = useCtrlHoldHint();
 
   useEffect(() => {
     if (!worktreeNudgeTarget) return;
@@ -96,7 +90,7 @@ export function WorktreeTree() {
   }
 
   const isRowVisible = (wt: Worktree) =>
-    matchesFilter(wt, filterText) &&
+    matchesWorktreeFilter(wt, filterText) &&
     (!attentionOnly || wantsAttention(useStore.getState(), wtId(wt)));
 
   const orderedProjects = orderProjects(projects, projectOrder);
@@ -116,6 +110,18 @@ export function WorktreeTree() {
   // ones currently hidden, in a way that's hard to predict — only allow it
   // over the full, unfiltered list.
   const canDrag = !narrowed;
+  // Only the first nine rows have shortcuts. Numbering comes from the same
+  // ordered/filtered list the `Ctrl+1–9` handler uses, so a number always
+  // matches the row the key would jump to (collapsed groups aside — their
+  // rows aren't rendered, leaving harmless gaps).
+  const shortcutNumbers = new Map<string, number>();
+  if (shortcutHints) {
+    for (const [index, id] of visibleWorktreeIds(useStore.getState())
+      .slice(0, 9)
+      .entries()) {
+      shortcutNumbers.set(id, index + 1);
+    }
+  }
   let matched = 0;
   const groupNodes: ReactNode[] = [];
 
@@ -135,6 +141,7 @@ export function WorktreeTree() {
           active={wtId(wt) === selectedId}
           onSelect={selectWorktree}
           onRemove={openDeleteDialog}
+          shortcutNumber={shortcutNumbers.get(wtId(wt))}
         />,
       );
     }

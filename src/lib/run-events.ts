@@ -2,6 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useStore } from "../store";
 import type { RunState } from "../types";
 import { decodeBase64 } from "./base64";
+import { appendBoundedOutput, MAX_RUN_OUTPUT_BYTES } from "./output-buffer";
 
 interface OutputEvent {
   key: string;
@@ -16,7 +17,7 @@ interface ExitEvent {
 
 function appendOutput(prev: RunState | undefined, data: number[]): RunState {
   return {
-    output: [...(prev?.output ?? []), ...data],
+    ...appendBoundedOutput(prev, data, MAX_RUN_OUTPUT_BYTES),
     running: true,
     exit_code: null,
   };
@@ -40,6 +41,7 @@ export async function initRun(): Promise<void> {
     const prev = run.get(key);
     run.set(key, {
       output: prev?.output ?? [],
+      dropped: prev?.dropped ?? 0,
       running: false,
       exit_code: code,
     });

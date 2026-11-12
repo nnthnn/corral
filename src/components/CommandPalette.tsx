@@ -153,7 +153,10 @@ export function CommandPalette() {
         className="flex max-h-[70vh] w-[min(560px,90vw)] flex-col overflow-hidden rounded-md border border-border bg-surface text-text shadow-lg"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center gap-2 border-b border-border px-3">
+        {/* `py-1.5` (with a matching reduced input padding) leaves room for
+            the global 4px focus ring — without it the ring is drawn flush
+            against the dialog's top edge and `overflow-hidden` clips its top. */}
+        <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
           <Search size={16} className="shrink-0 text-muted" />
           <input
             ref={inputRef}
@@ -161,7 +164,7 @@ export function CommandPalette() {
             placeholder="Jump to a worktree…"
             autoComplete="off"
             spellCheck={false}
-            className="w-full bg-transparent py-2.5 text-body text-text placeholder:text-muted focus:outline-none"
+            className="w-full bg-transparent py-1 text-body text-text placeholder:text-muted focus:outline-none"
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);

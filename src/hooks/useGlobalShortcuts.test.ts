@@ -4,8 +4,8 @@ import { DEFAULT_SETTINGS, useStore } from "../store";
 import type { Worktree } from "../types";
 import { useGlobalShortcuts } from "./useGlobalShortcuts";
 
-const wt = (feature: string): Worktree => ({
-  project: "corral",
+const wt = (feature: string, project = "corral"): Worktree => ({
+  project,
   feature,
   slug: feature,
   branch: `feat/${feature}`,
@@ -33,14 +33,45 @@ beforeEach(() => {
 
 describe("useGlobalShortcuts", () => {
   it("Ctrl+N selects the Nth worktree", () => {
-    useStore.setState({ worktrees: [wt("hulling"), wt("churning")] });
+    useStore.setState({
+      projects: ["corral"],
+      worktrees: [wt("hulling"), wt("churning")],
+    });
     renderHook(() => useGlobalShortcuts());
     keydown("2");
     expect(useStore.getState().selectedId).toBe("corral/churning");
   });
 
+  it("Ctrl+N follows the sidebar's custom project order", () => {
+    useStore.setState({
+      projects: ["corral", "other"],
+      worktrees: [wt("hulling"), wt("planting", "other")],
+      settings: { ...DEFAULT_SETTINGS, project_order: ["other", "corral"] },
+    });
+    renderHook(() => useGlobalShortcuts());
+    keydown("1");
+    expect(useStore.getState().selectedId).toBe("other/planting");
+  });
+
+  it("Ctrl+N skips worktrees hidden by the sidebar filter", () => {
+    useStore.setState({
+      projects: ["corral"],
+      worktrees: [wt("hulling"), wt("churning")],
+      filterText: "churn",
+    });
+    renderHook(() => useGlobalShortcuts());
+
+    const outOfRange = keydown("2");
+    expect(outOfRange.defaultPrevented).toBe(false);
+    expect(useStore.getState().selectedId).toBeNull();
+
+    keydown("1");
+    expect(useStore.getState().selectedId).toBe("corral/churning");
+  });
+
   it("Ctrl+] steps to the next worktree, wrapping past the end", () => {
     useStore.setState({
+      projects: ["corral"],
       worktrees: [wt("hulling"), wt("churning"), wt("harrowing")],
       selectedId: "corral/harrowing",
     });
@@ -51,6 +82,7 @@ describe("useGlobalShortcuts", () => {
 
   it("Ctrl+[ steps to the prev worktree, wrapping before the start", () => {
     useStore.setState({
+      projects: ["corral"],
       worktrees: [wt("hulling"), wt("churning"), wt("harrowing")],
       selectedId: "corral/hulling",
     });
@@ -61,6 +93,7 @@ describe("useGlobalShortcuts", () => {
 
   it("Ctrl+] with nothing selected yet selects the first worktree", () => {
     useStore.setState({
+      projects: ["corral"],
       worktrees: [wt("hulling"), wt("churning")],
       selectedId: null,
     });
