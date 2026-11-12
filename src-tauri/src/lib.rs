@@ -157,6 +157,7 @@ pub fn run() {
             commands::run::get_run_output,
             commands::run::resize_run,
             commands::run::resolve_run_command,
+            commands::run::list_just_targets,
         ])
         .setup(move |app| {
             #[cfg(dev)]

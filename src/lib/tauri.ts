@@ -6,6 +6,7 @@ import type {
   FileContent,
   FileEntry,
   GitStatus,
+  JustTarget,
   MergePrResult,
   MergeResult,
   PrDetails,
@@ -151,6 +152,10 @@ interface CommandMap {
   resolve_run_command: {
     args: { project: string; feature: string };
     result: string;
+  };
+  list_just_targets: {
+    args: { project: string; feature: string };
+    result: JustTarget[];
   };
   list_sessions: { args: undefined; result: SessionInfo[] };
   start_session: {
