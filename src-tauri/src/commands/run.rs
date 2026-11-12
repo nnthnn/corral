@@ -9,6 +9,7 @@
 use tauri::{AppHandle, State};
 
 use super::StrErr;
+use super::just_targets::{self, JustTarget};
 use super::pty_process::{self, PtyProcessState};
 use super::run_detect::detect_run_command;
 
@@ -88,4 +89,13 @@ pub fn resolve_run_command(project: String, feature: String) -> Result<String, S
     }
     let cwd = corral_core::config::worktree_path(&project, &feature).str_err()?;
     Ok(detect_run_command(&cwd).unwrap_or_default())
+}
+
+/// List this worktree's public `justfile` recipes for the Run tab's
+/// one-click target buttons. Empty when there's no justfile (or `just` can't
+/// parse it) — the tab then falls back to its plain command field.
+#[tauri::command]
+pub fn list_just_targets(project: String, feature: String) -> Result<Vec<JustTarget>, String> {
+    let cwd = corral_core::config::worktree_path(&project, &feature).str_err()?;
+    Ok(just_targets::list_targets(&cwd))
 }

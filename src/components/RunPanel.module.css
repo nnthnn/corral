@@ -1,0 +1,10 @@
+@reference "../styles.css";
+
+/* The justfile target clicked most recently in this worktree. Reuses the
+ * shared `.btn` outline, recolored to the primary accent instead of filling
+ * the button, so it reads as "selected" without competing with the Run
+ * button. */
+.selected {
+  --btn-border: var(--color-primary);
+  color: var(--color-primary);
+}

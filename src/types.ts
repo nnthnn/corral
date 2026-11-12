@@ -223,3 +223,14 @@ export interface RunState {
   running: boolean;
   exit_code: number | null;
 }
+
+/** One public `justfile` recipe, listed by `list_just_targets` for the Run
+ * tab's one-click target buttons. */
+export interface JustTarget {
+  name: string;
+  /** Recipe doc comment, used as the button's tooltip. */
+  doc: string | null;
+  /** Parameters with no default — clicking this target prefills the command
+   * instead of running it, since `just <name>` would fail without them. */
+  required_params: string[];
+}

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useStore } from "../store";
 import type { Worktree } from "../types";
 import { RunPanel } from "./RunPanel";
+import styles from "./RunPanel.module.css";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -200,6 +201,103 @@ describe("RunPanel", () => {
       running: false,
       exit_code: null,
     });
+  });
+
+  it("lists justfile targets and runs one on click", async () => {
+    vi.mocked(invoke).mockImplementation((cmd) => {
+      if (cmd === "resolve_run_command") return Promise.resolve("");
+      if (cmd === "list_just_targets") {
+        return Promise.resolve([
+          { name: "dev", doc: "start the dev server", required_params: [] },
+          { name: "test", doc: null, required_params: [] },
+        ]);
+      }
+      return Promise.resolve(undefined);
+    });
+    render(<RunPanel wt={wt} />);
+
+    const dev = await screen.findByRole("button", { name: "dev" });
+    expect(screen.getByRole("button", { name: "test" })).toBeInTheDocument();
+    expect(dev).toHaveAttribute("title", "just dev — start the dev server");
+    expect(dev).not.toHaveClass(styles.selected);
+
+    fireEvent.click(dev);
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("start_run", {
+        project: "corral",
+        feature: "weeding",
+        command: "just dev",
+      }),
+    );
+    expect(screen.getByPlaceholderText("e.g. pnpm dev")).toHaveValue(
+      "just dev",
+    );
+    expect(dev).toHaveClass(styles.selected);
+  });
+
+  it("moves the highlight to the most recently clicked target", async () => {
+    vi.mocked(invoke).mockImplementation((cmd) => {
+      if (cmd === "resolve_run_command") return Promise.resolve("");
+      if (cmd === "list_just_targets") {
+        return Promise.resolve([
+          { name: "deploy", doc: null, required_params: ["env"] },
+          { name: "release", doc: null, required_params: ["version"] },
+        ]);
+      }
+      return Promise.resolve(undefined);
+    });
+    render(<RunPanel wt={wt} />);
+
+    const deploy = await screen.findByRole("button", { name: "deploy" });
+    const release = screen.getByRole("button", { name: "release" });
+
+    fireEvent.click(deploy);
+    expect(deploy).toHaveClass(styles.selected);
+    expect(release).not.toHaveClass(styles.selected);
+
+    fireEvent.click(release);
+    expect(release).toHaveClass(styles.selected);
+    expect(deploy).not.toHaveClass(styles.selected);
+  });
+
+  it("prefills instead of running a target that needs parameters", async () => {
+    vi.mocked(invoke).mockImplementation((cmd) => {
+      if (cmd === "resolve_run_command") return Promise.resolve("");
+      if (cmd === "list_just_targets") {
+        return Promise.resolve([
+          { name: "deploy", doc: null, required_params: ["env"] },
+        ]);
+      }
+      return Promise.resolve(undefined);
+    });
+    render(<RunPanel wt={wt} />);
+
+    const deploy = await screen.findByRole("button", { name: "deploy" });
+    expect(deploy).toHaveAttribute("title", "just deploy — needs: env");
+
+    fireEvent.click(deploy);
+
+    expect(screen.getByPlaceholderText("e.g. pnpm dev")).toHaveValue(
+      "just deploy ",
+    );
+    expect(invoke).not.toHaveBeenCalledWith("start_run", expect.anything());
+  });
+
+  it("disables justfile targets while a run is in progress", async () => {
+    useStore.setState({
+      run: new Map([
+        ["corral/weeding", { output: [104], running: true, exit_code: null }],
+      ]),
+    });
+    vi.mocked(invoke).mockImplementation((cmd) =>
+      cmd === "list_just_targets"
+        ? Promise.resolve([{ name: "dev", doc: null, required_params: [] }])
+        : Promise.resolve(undefined),
+    );
+    render(<RunPanel wt={wt} />);
+
+    expect(await screen.findByRole("button", { name: "dev" })).toBeDisabled();
   });
 });
 

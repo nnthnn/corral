@@ -1,6 +1,7 @@
 import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
+import { clsx } from "clsx";
 import { Play, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "../lib/tauri";
@@ -8,9 +9,10 @@ import { attachCopyOnCtrlC, createLinkedTerminal } from "../lib/terminal";
 import { showError } from "../lib/toasts";
 import { THEME } from "../session";
 import { useStore } from "../store";
-import type { Worktree } from "../types";
+import type { JustTarget, Worktree } from "../types";
 import { wtId } from "../utils";
 import { Button } from "./Button";
+import styles from "./RunPanel.module.css";
 
 /** The Run tab's content for the currently selected worktree — a persistent
  * command input plus a read-only terminal streaming a long-lived dev-server
@@ -34,6 +36,23 @@ export function RunPanel({ wt }: { wt: Worktree }) {
   function setCommand(value: string) {
     setCommandByWtId((prev) => new Map(prev).set(id, value));
   }
+  // Public `justfile` recipes per worktree, loaded alongside the command.
+  // Refetched on every view of a worktree id (not just the first) so edits to
+  // the justfile show up after switching away and back; the map keeps the
+  // previous list visible during the refetch instead of flickering.
+  const [targetsByWtId, setTargetsByWtId] = useState(
+    () => new Map<string, JustTarget[]>(),
+  );
+  const targets = targetsByWtId.get(id) ?? [];
+  // The last justfile target clicked in each worktree, so its chip can stay
+  // highlighted as a visual bookmark. Kept per worktree id like the command
+  // map; purely in-memory (the run_command saved by `start_run` still
+  // pre-fills the input after a restart).
+  const [lastTargetByWtId, setLastTargetByWtId] = useState(
+    () => new Map<string, string>(),
+  );
+  const lastTarget = lastTargetByWtId.get(id) ?? null;
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<{
     term: Terminal;
@@ -56,6 +75,19 @@ export function RunPanel({ wt }: { wt: Worktree }) {
         })
         .catch((err) => showError(`Run output wouldn't load: ${err}`));
     }
+    // Always refetch (not just when the map lacks `id`), so a justfile edited
+    // since this worktree was last viewed shows up. Guard the shape: tests
+    // and older backends may resolve `undefined`/`null` for this optional
+    // command.
+    invoke("list_just_targets", { project: wt.project, feature: wt.feature })
+      .then((list) => {
+        setTargetsByWtId((prev) =>
+          new Map(prev).set(id, Array.isArray(list) ? list : []),
+        );
+      })
+      .catch(() => {
+        setTargetsByWtId((prev) => new Map(prev).set(id, []));
+      });
     if (commandByWtId.has(id)) return;
     invoke("resolve_run_command", { project: wt.project, feature: wt.feature })
       .then((resolved) => setCommand(resolved))
@@ -140,7 +172,7 @@ export function RunPanel({ wt }: { wt: Worktree }) {
 
   const running = state?.running ?? false;
 
-  async function handleRun() {
+  async function startRun(cmd: string) {
     const run = new Map(useStore.getState().run);
     run.set(id, { output: [], running: true, exit_code: null });
     useStore.setState({ run });
@@ -148,7 +180,7 @@ export function RunPanel({ wt }: { wt: Worktree }) {
       await invoke("start_run", {
         project: wt.project,
         feature: wt.feature,
-        command,
+        command: cmd,
       });
     } catch (err) {
       const rolledBack = new Map(useStore.getState().run);
@@ -156,6 +188,34 @@ export function RunPanel({ wt }: { wt: Worktree }) {
       useStore.setState({ run: rolledBack });
       showError(`Run wouldn't start: ${err}`);
     }
+  }
+
+  function handleRun() {
+    return startRun(command);
+  }
+
+  /** One-click `just` target: run it with no arguments when possible. A
+   * recipe with required parameters can't run bare, so prefill the command
+   * and put the caret in the input for the user to finish (and press ▶). */
+  function handleTarget(target: JustTarget) {
+    setLastTargetByWtId((prev) => new Map(prev).set(id, target.name));
+    const cmd = `just ${target.name}`;
+    if (target.required_params.length > 0) {
+      setCommand(`${cmd} `);
+      inputRef.current?.focus();
+      return;
+    }
+    setCommand(cmd);
+    void startRun(cmd);
+  }
+
+  function targetTitle(target: JustTarget): string {
+    const parts = [`just ${target.name}`];
+    if (target.doc) parts.push(target.doc);
+    if (target.required_params.length > 0) {
+      parts.push(`needs: ${target.required_params.join(", ")}`);
+    }
+    return parts.join(" — ");
   }
 
   async function handleStop() {
@@ -170,6 +230,7 @@ export function RunPanel({ wt }: { wt: Worktree }) {
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-2 px-4 py-2 border-b border-border">
         <input
+          ref={inputRef}
           type="text"
           className="flex-1 bg-surface-2 border border-border rounded-md px-2 py-1 text-body"
           placeholder="e.g. pnpm dev"
@@ -193,6 +254,27 @@ export function RunPanel({ wt }: { wt: Worktree }) {
           </Button>
         )}
       </div>
+      {targets.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 px-4 py-1.5 border-b border-border max-h-24 overflow-y-auto">
+          <span className="text-label font-mono text-muted shrink-0 mr-1">
+            just
+          </span>
+          {targets.map((target) => (
+            <Button
+              key={target.name}
+              className={clsx(
+                "font-mono",
+                target.name === lastTarget && styles.selected,
+              )}
+              title={targetTitle(target)}
+              disabled={running}
+              onClick={() => handleTarget(target)}
+            >
+              {target.name}
+            </Button>
+          ))}
+        </div>
+      )}
       {!running && state?.exit_code != null && (
         <p className="px-4 py-1 text-body text-muted">
           Exited (code {state.exit_code})
