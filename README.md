@@ -49,6 +49,11 @@ macOS builds are currently unsigned unless the release was built with signing
 secrets configured, so the first launch may need **right-click → Open** to get
 past Gatekeeper.
 
+On macOS, corral reads your login shell's environment once at startup — the
+same way Terminal.app does — so Homebrew/nvm/pnpm binaries and anything you
+export from `.zprofile`/`.zshrc` are available to agent sessions and Run
+commands.
+
 ## Layout
 
 ```

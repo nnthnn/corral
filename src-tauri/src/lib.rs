@@ -55,6 +55,22 @@ fn should_decorate() -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // A macOS app launched from Finder/Dock/`open` inherits launchd's minimal
+    // environment, not the user's shell: PATH has no Homebrew/pnpm/nvm
+    // entries, and anything exported from `.zprofile`/`.zshrc` is missing.
+    // Capture it here — before the Tauri builder spawns any worker thread —
+    // so `std::env::set_var` is sound and every child corral later spawns
+    // (agent PTYs, Run/Setup commands, git, gh) inherits the same environment
+    // a terminal would have. See `corral_core::shell_env` for the merge rules.
+    //
+    // Linux `.desktop` launches have the same problem; only macOS is enabled
+    // for now (a terminal-launched dev build already has the right env, and
+    // this is the platform the bug was reported on).
+    #[cfg(target_os = "macos")]
+    let shell_env_started = std::time::Instant::now();
+    #[cfg(target_os = "macos")]
+    let shell_env = corral_core::shell_env::capture();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
@@ -64,6 +80,24 @@ pub fn run() {
         .with_writer(std::io::stderr)
         .init();
     tracing::info!("corral starting");
+
+    #[cfg(target_os = "macos")]
+    match shell_env {
+        Ok(vars) => {
+            // SAFETY: no threads have been started yet — `run()` is called
+            // straight from `main`, and the Tauri builder below is what
+            // spawns them.
+            let adopted = unsafe { corral_core::shell_env::apply(&vars) };
+            tracing::info!(
+                "shell_env: adopted {adopted} variables from the login shell ({}ms)",
+                shell_env_started.elapsed().as_millis()
+            );
+        }
+        Err(e) => tracing::warn!(
+            "shell_env: could not read the login shell environment: {e} \
+             (agents may not find Homebrew/pnpm/nvm binaries)"
+        ),
+    }
 
     // On Linux, Tauri's default custom-protocol content serving
     // (tauri://localhost) never completes navigation on this system's
