@@ -6,7 +6,6 @@ import type {
   FileContent,
   FileEntry,
   GitStatus,
-  JustTarget,
   MergePrResult,
   MergeResult,
   PrDetails,
@@ -15,6 +14,7 @@ import type {
   ProvisionState,
   RebaseResult,
   RunState,
+  RunTargets,
   Settings,
   Worktree,
 } from "../types";
@@ -153,9 +153,9 @@ interface CommandMap {
     args: { project: string; feature: string };
     result: string;
   };
-  list_just_targets: {
+  list_run_targets: {
     args: { project: string; feature: string };
-    result: JustTarget[];
+    result: RunTargets;
   };
   list_sessions: { args: undefined; result: SessionInfo[] };
   start_session: {

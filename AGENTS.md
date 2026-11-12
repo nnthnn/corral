@@ -62,6 +62,8 @@ corral/
 │   │   ├── provision.rs            # one-shot post-create setup (e.g. `pnpm install`)
 │   │   ├── run.rs                  # long-lived "Run" command per worktree (Run tab)
 │   │   ├── run_detect.rs           # best-effort dev-command auto-detection
+│   │   ├── run_targets.rs          # Run-tab one-click targets: justfile recipes
+│   │   │                           #   (else package.json scripts)
 │   │   ├── pty_process.rs          # shared one-shot-PTY core (used by provision + run)
 │   │   ├── settings.rs             # app-settings commands
 │   │   └── system.rs               # notify icon, clipboard paste, open editor/terminal
@@ -442,7 +444,9 @@ See `IDEAS.md` for the backlog. As of the latest work, implemented:
   `Ctrl+1–9` worktrees, `Ctrl+Tab` tabs, `Ctrl+[`/`]` prev/next.
 - **Run panel**: a long-lived per-worktree "Run" command (e.g. `pnpm dev`)
   in its own tab, with best-effort auto-detection of the project's dev
-  command.
+  command and one-click target chips: the justfile's public recipes when the
+  worktree has one, else the `package.json` scripts (lifecycle hooks
+  filtered), run through the detected package manager.
 - **Files**: a File tab with gitignore-aware tree browsing and image / SVG /
   Markdown previews.
 - **Git/PR integration**: fast-forward merge of a worktree's branch into its

@@ -9,10 +9,14 @@ import { attachCopyOnCtrlC, createLinkedTerminal } from "../lib/terminal";
 import { showError } from "../lib/toasts";
 import { THEME } from "../session";
 import { useStore } from "../store";
-import type { JustTarget, Worktree } from "../types";
+import type { RunTarget, RunTargets, Worktree } from "../types";
 import { wtId } from "../utils";
 import { Button } from "./Button";
 import styles from "./RunPanel.module.css";
+
+/** Stable empty row for worktrees with no justfile/package scripts, so the
+ * `targets` value doesn't get a new identity on every render. */
+const EMPTY_TARGETS: RunTargets = { source: null, targets: [] };
 
 /** The Run tab's content for the currently selected worktree — a persistent
  * command input plus a read-only terminal streaming a long-lived dev-server
@@ -36,18 +40,19 @@ export function RunPanel({ wt }: { wt: Worktree }) {
   function setCommand(value: string) {
     setCommandByWtId((prev) => new Map(prev).set(id, value));
   }
-  // Public `justfile` recipes per worktree, loaded alongside the command.
-  // Refetched on every view of a worktree id (not just the first) so edits to
-  // the justfile show up after switching away and back; the map keeps the
-  // previous list visible during the refetch instead of flickering.
+  // One-click targets per worktree: the justfile's public recipes, or (when
+  // there's no justfile) the package.json scripts. Refetched on every view of
+  // a worktree id (not just the first) so edits to either file show up after
+  // switching away and back; the map keeps the previous list visible during
+  // the refetch instead of flickering.
   const [targetsByWtId, setTargetsByWtId] = useState(
-    () => new Map<string, JustTarget[]>(),
+    () => new Map<string, RunTargets>(),
   );
-  const targets = targetsByWtId.get(id) ?? [];
-  // The last justfile target clicked in each worktree, so its chip can stay
-  // highlighted as a visual bookmark. Kept per worktree id like the command
-  // map; purely in-memory (the run_command saved by `start_run` still
-  // pre-fills the input after a restart).
+  const targets = targetsByWtId.get(id) ?? EMPTY_TARGETS;
+  // The last target clicked in each worktree, so its chip can stay highlighted
+  // as a visual bookmark. Kept per worktree id like the command map; purely
+  // in-memory (the run_command saved by `start_run` still pre-fills the input
+  // after a restart).
   const [lastTargetByWtId, setLastTargetByWtId] = useState(
     () => new Map<string, string>(),
   );
@@ -75,18 +80,21 @@ export function RunPanel({ wt }: { wt: Worktree }) {
         })
         .catch((err) => showError(`Run output wouldn't load: ${err}`));
     }
-    // Always refetch (not just when the map lacks `id`), so a justfile edited
-    // since this worktree was last viewed shows up. Guard the shape: tests
-    // and older backends may resolve `undefined`/`null` for this optional
-    // command.
-    invoke("list_just_targets", { project: wt.project, feature: wt.feature })
+    // Always refetch (not just when the map lacks `id`), so a justfile or
+    // package.json edited since this worktree was last viewed shows up. Guard
+    // the shape: tests and older backends may resolve `undefined`/`null` for
+    // this optional command.
+    invoke("list_run_targets", { project: wt.project, feature: wt.feature })
       .then((list) => {
         setTargetsByWtId((prev) =>
-          new Map(prev).set(id, Array.isArray(list) ? list : []),
+          new Map(prev).set(
+            id,
+            list && Array.isArray(list.targets) ? list : EMPTY_TARGETS,
+          ),
         );
       })
       .catch(() => {
-        setTargetsByWtId((prev) => new Map(prev).set(id, []));
+        setTargetsByWtId((prev) => new Map(prev).set(id, EMPTY_TARGETS));
       });
     if (commandByWtId.has(id)) return;
     invoke("resolve_run_command", { project: wt.project, feature: wt.feature })
@@ -194,23 +202,23 @@ export function RunPanel({ wt }: { wt: Worktree }) {
     return startRun(command);
   }
 
-  /** One-click `just` target: run it with no arguments when possible. A
-   * recipe with required parameters can't run bare, so prefill the command
-   * and put the caret in the input for the user to finish (and press ▶). */
-  function handleTarget(target: JustTarget) {
-    setLastTargetByWtId((prev) => new Map(prev).set(id, target.name));
-    const cmd = `just ${target.name}`;
+  /** One-click run target: run it with no arguments when possible. A recipe
+   * with required parameters can't run bare, so prefill the command and put
+   * the caret in the input for the user to finish (and press ▶). Package
+   * scripts never have required parameters, so they always run immediately. */
+  function handleTarget(target: RunTarget) {
+    setLastTargetByWtId((prev) => new Map(prev).set(id, target.label));
     if (target.required_params.length > 0) {
-      setCommand(`${cmd} `);
+      setCommand(`${target.command} `);
       inputRef.current?.focus();
       return;
     }
-    setCommand(cmd);
-    void startRun(cmd);
+    setCommand(target.command);
+    void startRun(target.command);
   }
 
-  function targetTitle(target: JustTarget): string {
-    const parts = [`just ${target.name}`];
+  function targetTitle(target: RunTarget): string {
+    const parts = [target.command];
     if (target.doc) parts.push(target.doc);
     if (target.required_params.length > 0) {
       parts.push(`needs: ${target.required_params.join(", ")}`);
@@ -254,23 +262,23 @@ export function RunPanel({ wt }: { wt: Worktree }) {
           </Button>
         )}
       </div>
-      {targets.length > 0 && (
+      {targets.targets.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5 px-4 py-1.5 border-b border-border max-h-24 overflow-y-auto">
           <span className="text-label font-mono text-muted shrink-0 mr-1">
-            just
+            {targets.source}
           </span>
-          {targets.map((target) => (
+          {targets.targets.map((target) => (
             <Button
-              key={target.name}
+              key={target.command}
               className={clsx(
                 "font-mono",
-                target.name === lastTarget && styles.selected,
+                target.label === lastTarget && styles.selected,
               )}
               title={targetTitle(target)}
               disabled={running}
               onClick={() => handleTarget(target)}
             >
-              {target.name}
+              {target.label}
             </Button>
           ))}
         </div>
