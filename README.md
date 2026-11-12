@@ -99,6 +99,10 @@ Install the CLI to your PATH:
 cargo install --path crates/corral-cli
 ```
 
+The `.deb` and `.rpm` release bundles also ship it as `/usr/bin/corral`
+(the AppImage contains it at `usr/bin/corral`, but AppImages don't put
+anything on your PATH).
+
 ## Status
 
 Implemented:

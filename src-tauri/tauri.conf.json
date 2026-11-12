@@ -18,6 +18,23 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/bin/corral": "../target/release/corral"
+        }
+      },
+      "rpm": {
+        "files": {
+          "/usr/bin/corral": "../target/release/corral"
+        }
+      },
+      "appimage": {
+        "files": {
+          "/usr/bin/corral": "../target/release/corral"
+        }
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

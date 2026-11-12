@@ -60,6 +60,11 @@ jobs:
           fi
           echo "Building corral v$cargo_version"
 
+      # The bundles ship the CLI as /usr/bin/corral, so it has to exist before
+      # `pnpm tauri build` runs (see bundle.linux.*.files in tauri.conf.json).
+      - name: Build CLI
+        run: cargo build --release -p corral-cli
+
       # `pnpm tauri build` runs the beforeBuildCommand (tsc + vite build) first,
       # then compiles the Rust app and produces the bundles in
       # target/release/bundle/{deb,rpm,appimage} (the workspace target dir).

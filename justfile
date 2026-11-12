@@ -55,13 +55,17 @@ install-hooks:
 # Build a real standalone binary fast, skipping the tauri-cli bundler (see CLAUDE.md)
 build: frontend
     cargo build -p corral-app --features tauri/custom-protocol
+    cargo build -p corral-cli
 
 # Same as `build`, but --release
 build-release: frontend
     cargo build -p corral-app --release --features tauri/custom-protocol
+    cargo build --release -p corral-cli
 
-# Full release build + .deb/.rpm/.AppImage bundling via tauri-cli — slow
+# Full release build + .deb/.rpm/.AppImage bundling via tauri-cli — slow.
+# Builds the CLI first; the bundles ship it as /usr/bin/corral.
 bundle:
+    cargo build --release -p corral-cli
     pnpm tauri build
 
 # Build and run the standalone debug binary
