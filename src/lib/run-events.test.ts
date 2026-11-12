@@ -46,4 +46,21 @@ describe("initRun", () => {
     expect(state?.running).toBe(false);
     expect(state?.exit_code).toBe(0);
   });
+
+  it("caps retained output instead of growing unbounded", async () => {
+    await initRun();
+    const cap = 1024 * 1024;
+    listeners.get("run-output")?.({
+      // 1MB of 0x01 bytes, base64-encoded.
+      payload: { key: "corral/weeding", data: btoa("\x01".repeat(cap)) },
+    });
+    listeners.get("run-output")?.({
+      payload: { key: "corral/weeding", data: "AgM=" },
+    });
+
+    const state = useStore.getState().run.get("corral/weeding");
+    expect(state?.output.length).toBe(cap);
+    expect(state?.dropped).toBe(2);
+    expect(state?.output.slice(-2)).toEqual([2, 3]);
+  });
 });

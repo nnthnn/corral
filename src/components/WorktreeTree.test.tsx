@@ -1,7 +1,19 @@
-import { render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useStore } from "../store";
+import type { Worktree } from "../types";
 import { WorktreeTree } from "./WorktreeTree";
+
+const wt = (feature: string): Worktree => ({
+  project: "corral",
+  feature,
+  slug: feature,
+  branch: `feat/${feature}`,
+  path: `/path/${feature}`,
+  status: null,
+  has_resumable_session: false,
+  note: "",
+});
 
 beforeEach(() => {
   useStore.setState(useStore.getInitialState());
@@ -41,5 +53,30 @@ describe("WorktreeTree", () => {
     expect(screen.getByTitle("New feature in other")).not.toHaveClass(
       "project-add-nudge",
     );
+  });
+
+  it("reveals each row's Ctrl+N number while Ctrl is held", () => {
+    vi.useFakeTimers();
+    try {
+      useStore.setState({
+        worktrees: [wt("hulling"), wt("churning")],
+      });
+      render(<WorktreeTree />);
+      expect(screen.queryByTitle("Ctrl+1")).not.toBeInTheDocument();
+
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Control" }));
+        vi.advanceTimersByTime(2000);
+      });
+      expect(screen.getByTitle("Ctrl+1")).toHaveTextContent("1");
+      expect(screen.getByTitle("Ctrl+2")).toHaveTextContent("2");
+
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent("keyup", { key: "Control" }));
+      });
+      expect(screen.queryByTitle("Ctrl+1")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

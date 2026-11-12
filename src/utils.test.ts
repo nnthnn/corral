@@ -7,7 +7,9 @@ import {
   formatBytes,
   highlightMatch,
   isFullyMerged,
+  matchesWorktreeFilter,
   moveProject,
+  orderedWorktreeIds,
   orderProjects,
   relativeTime,
   reorderProjects,
@@ -406,6 +408,64 @@ describe("orderProjects", () => {
 
   it("drops stored entries for projects that no longer exist", () => {
     expect(orderProjects(["a", "b"], ["gone", "b", "a"])).toEqual(["b", "a"]);
+  });
+});
+
+describe("orderedWorktreeIds", () => {
+  function wt(project: string, feature: string): Worktree {
+    return {
+      project,
+      feature,
+      slug: feature,
+      branch: `feat/${feature}`,
+      path: `/path/${feature}`,
+      status: null,
+      has_resumable_session: false,
+      note: "",
+    };
+  }
+
+  it("groups worktrees by project in custom project order", () => {
+    const worktrees = [wt("corral", "a"), wt("other", "x")];
+    expect(
+      orderedWorktreeIds(worktrees, ["corral", "other"], ["other", "corral"]),
+    ).toEqual(["other/x", "corral/a"]);
+  });
+
+  it("applies the sidebar filter when given a predicate", () => {
+    const worktrees = [wt("corral", "a"), wt("corral", "b")];
+    expect(
+      orderedWorktreeIds(worktrees, ["corral"], [], (w) => w.feature === "b"),
+    ).toEqual(["corral/b"]);
+  });
+});
+
+describe("matchesWorktreeFilter", () => {
+  function wt(patch: Partial<Worktree>): Worktree {
+    return {
+      project: "corral",
+      feature: "churning",
+      slug: "churning",
+      branch: "feat/churning",
+      path: "/path/churning",
+      status: null,
+      has_resumable_session: false,
+      note: "",
+      ...patch,
+    };
+  }
+
+  it("matches everything when the filter is empty", () => {
+    expect(matchesWorktreeFilter(wt({}), "")).toBe(true);
+  });
+
+  it("matches project, title, feature, and branch", () => {
+    const w = wt({ title: "Plotting The Weeds" });
+    expect(matchesWorktreeFilter(w, "corral")).toBe(true);
+    expect(matchesWorktreeFilter(w, "plotting")).toBe(true);
+    expect(matchesWorktreeFilter(w, "churning")).toBe(true);
+    expect(matchesWorktreeFilter(w, "feat/")).toBe(true);
+    expect(matchesWorktreeFilter(w, "nothing")).toBe(false);
   });
 });
 

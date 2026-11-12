@@ -214,12 +214,18 @@ export interface ProjectSettings {
 
 export interface ProvisionState {
   output: number[];
+  /** Bytes trimmed from the front of `output` once it hit its cap — see
+   * `lib/output-buffer.ts`. Absent on backend snapshots (nothing was trimmed
+   * there), which reads as 0. */
+  dropped?: number;
   running: boolean;
   exit_code: number | null;
 }
 
 export interface RunState {
   output: number[];
+  /** See `ProvisionState.dropped`. */
+  dropped?: number;
   running: boolean;
   exit_code: number | null;
 }

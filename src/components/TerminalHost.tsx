@@ -20,7 +20,13 @@ import { useStore } from "../store";
 export function TerminalHost() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const selectedId = useStore((s) => s.selectedId);
-  const sessions = useStore((s) => s.sessions);
+  // Derived boolean, not the whole `sessions` Map: `onSessionStatus` allocates
+  // a new Map on every event, so subscribing to it re-ran the effect below
+  // (and `show()`'s `focus()`) for status changes in *any* session — yanking
+  // the caret out of the sidebar note editor, palette, or a dialog.
+  const running = useStore((s) =>
+    s.selectedId ? (s.sessions.get(s.selectedId)?.running ?? false) : false,
+  );
   const activeTab = useStore((s) => s.activeTab);
   const settingsOpen = useStore((s) => s.settingsOpen);
 
@@ -72,7 +78,6 @@ export function TerminalHost() {
       return;
     }
     if (activeTab !== "agent") return;
-    const running = sessions.get(selectedId)?.running ?? false;
     // Re-run `show()` (not just on selection change) whenever the Agent tab
     // becomes active again: switching away hides `#agent-pane` via the
     // `hidden` DOM attribute, and this webkit2gtk build doesn't reliably
@@ -81,7 +86,7 @@ export function TerminalHost() {
     // fixes it (same fix already relied on when switching worktrees).
     if (sessionMgr.has(selectedId) || running) sessionMgr.show(selectedId);
     else sessionMgr.hideAll();
-  }, [selectedId, sessions, activeTab, settingsOpen]);
+  }, [selectedId, running, activeTab, settingsOpen]);
 
   return (
     <div

@@ -33,6 +33,22 @@ export const wtId = (wt: Worktree) => sessionId(wt.project, wt.feature);
 
 export const worktreeTitle = (wt: Worktree): string => wt.title || wt.slug;
 
+/** Whether a worktree row survives the sidebar's text filter — shared by the
+ * sidebar itself and the keyboard shortcuts, so `Ctrl+1–9` numbers the rows
+ * you can actually see. */
+export function matchesWorktreeFilter(
+  wt: Worktree,
+  filterText: string,
+): boolean {
+  if (!filterText) return true;
+  return (
+    wt.project.toLowerCase().includes(filterText) ||
+    worktreeTitle(wt).toLowerCase().includes(filterText) ||
+    wt.feature.toLowerCase().includes(filterText) ||
+    wt.branch.toLowerCase().includes(filterText)
+  );
+}
+
 export type FeatureStatus =
   | "new"
   | "in-progress"
@@ -181,6 +197,29 @@ export function orderProjects(projects: string[], order: string[]): string[] {
   return [...ordered, ...remaining];
 }
 
+/** Worktree ids in the exact order `WorktreeTree` renders them: projects via
+ * `orderProjects`, worktrees within a project in their existing array order.
+ * `isVisible` lets callers mirror the sidebar's filter — the keyboard
+ * shortcuts use it so `Ctrl+1–9` numbers the rows on screen, not the raw
+ * `worktrees` array. */
+export function orderedWorktreeIds(
+  worktrees: Worktree[],
+  projects: string[],
+  projectOrder: string[],
+  isVisible?: (wt: Worktree) => boolean,
+): string[] {
+  const ordered = orderProjects(projects, projectOrder);
+  const ids: string[] = [];
+  for (const project of ordered) {
+    for (const wt of worktrees) {
+      if (wt.project !== project) continue;
+      if (isVisible && !isVisible(wt)) continue;
+      ids.push(wtId(wt));
+    }
+  }
+  return ids;
+}
+
 /** Picks what should become selected after `removedId` is removed — the
  * next worktree in the same sidebar order `WorktreeTree` renders (projects
  * via `orderProjects`, worktrees within a project in their existing array
@@ -192,13 +231,7 @@ export function adjacentWorktreeId(
   projectOrder: string[],
   removedId: string,
 ): string | null {
-  const ordered = orderProjects(projects, projectOrder);
-  const flattened: string[] = [];
-  for (const project of ordered) {
-    for (const wt of worktrees) {
-      if (wt.project === project) flattened.push(wtId(wt));
-    }
-  }
+  const flattened = orderedWorktreeIds(worktrees, projects, projectOrder);
   const index = flattened.indexOf(removedId);
   if (index === -1) return null;
   if (flattened[index + 1] !== undefined) return flattened[index + 1];

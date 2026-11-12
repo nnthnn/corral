@@ -60,6 +60,7 @@ describe("initProvisioning", () => {
 
     const state = useStore.getState().provisioning.get("corral/weeding");
     expect(state?.output.length).toBe(cap);
+    expect(state?.dropped).toBe(2);
     // The oldest bytes were trimmed, so the tail is the most recent chunk.
     expect(state?.output.slice(-2)).toEqual([2, 3]);
   });

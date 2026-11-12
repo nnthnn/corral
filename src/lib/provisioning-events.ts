@@ -2,6 +2,10 @@ import { listen } from "@tauri-apps/api/event";
 import { useStore } from "../store";
 import type { ProvisionState } from "../types";
 import { decodeBase64 } from "./base64";
+import {
+  appendBoundedOutput,
+  MAX_PROVISION_OUTPUT_BYTES,
+} from "./output-buffer";
 
 interface OutputEvent {
   key: string;
@@ -14,20 +18,12 @@ interface ExitEvent {
   code: number | null;
 }
 
-/** Cap retained setup-command output, mirroring the PTY scrollback cap
- * (`scrollback_bytes` in `src-tauri/src/commands/session.rs`) — a chatty or
- * looping setup script shouldn't grow this array unbounded for the lifetime
- * of a long-running provisioning session. */
-const MAX_PROVISION_OUTPUT_BYTES = 256 * 1024;
-
 function appendOutput(
   prev: ProvisionState | undefined,
   data: number[],
 ): ProvisionState {
-  const output = [...(prev?.output ?? []), ...data];
-  const overflow = output.length - MAX_PROVISION_OUTPUT_BYTES;
   return {
-    output: overflow > 0 ? output.slice(overflow) : output,
+    ...appendBoundedOutput(prev, data, MAX_PROVISION_OUTPUT_BYTES),
     running: true,
     exit_code: null,
   };
@@ -54,6 +50,7 @@ export async function initProvisioning(): Promise<void> {
     const prev = provisioning.get(key);
     provisioning.set(key, {
       output: prev?.output ?? [],
+      dropped: prev?.dropped ?? 0,
       running: false,
       exit_code: code,
     });

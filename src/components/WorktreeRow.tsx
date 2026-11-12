@@ -23,6 +23,9 @@ interface WorktreeRowProps {
   active: boolean;
   onSelect: (id: string) => void;
   onRemove: (wt: Worktree) => void;
+  /** `Ctrl+N` number to show in place of the git-status icon while Ctrl is
+   * held (`useCtrlHoldHint` in `WorktreeTree`). Undefined = normal icon. */
+  shortcutNumber?: number;
 }
 
 export function WorktreeRow({
@@ -31,6 +34,7 @@ export function WorktreeRow({
   active,
   onSelect,
   onRemove,
+  shortcutNumber,
 }: WorktreeRowProps) {
   const id = wtId(wt);
   const storedPrInfo = useStore((s) => s.prInfoByWtId);
@@ -103,7 +107,16 @@ export function WorktreeRow({
       }}
       onBlur={hover.scheduleClose}
     >
-      <FeatureStatusIcon status={status} working={working} />
+      {shortcutNumber !== undefined ? (
+        <span
+          className="inline-flex flex-none size-5.5 items-center justify-center rounded-sm border border-border bg-surface-2 font-mono text-label font-semibold text-primary"
+          title={`Ctrl+${shortcutNumber}`}
+        >
+          {shortcutNumber}
+        </span>
+      ) : (
+        <FeatureStatusIcon status={status} working={working} />
+      )}
       <span className="wt-name flex-1 min-w-0 whitespace-nowrap overflow-hidden text-ellipsis">
         <Highlight text={worktreeTitle(wt)} needle={filterText} />
       </span>
