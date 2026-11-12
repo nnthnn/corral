@@ -120,6 +120,23 @@ describe("resolveMarkdownImages", () => {
     expect(html).toContain("data:image/png;base64,AAA");
   });
 
+  it("inlines a relative SVG from its text content", async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"></svg>';
+    vi.mocked(invoke).mockResolvedValue({ kind: "text", text: svg });
+    const html = await resolveMarkdownImages(
+      wt,
+      "readme.md",
+      '<p><img src="design/logo/mark.svg" alt="mark"></p>',
+    );
+    expect(invoke).toHaveBeenCalledWith("read_worktree_file", {
+      project: "corral",
+      feature: "hulling",
+      path: "design/logo/mark.svg",
+    });
+    expect(html).toContain("data:image/svg+xml;charset=utf-8,");
+    expect(html).toContain(encodeURIComponent(svg));
+  });
+
   it("leaves external images alone", async () => {
     const html = await resolveMarkdownImages(
       wt,
