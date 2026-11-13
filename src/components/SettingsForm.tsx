@@ -332,17 +332,15 @@ export function SettingsForm() {
                 <label>
                   OpenCode v2 executable
                   <input
-                    placeholder="opencode2"
+                    placeholder="opencode"
                     value={opencode2ExecutablePath}
                     onChange={(e) => setOpencode2ExecutablePath(e.target.value)}
                   />
                 </label>
                 <p className="hint">
-                  Path or command; blank uses <code>opencode2</code> from{" "}
+                  Path or command; blank uses <code>opencode</code> from{" "}
                   <code>PATH</code>. Install via{" "}
-                  <code>pnpm add -g @opencode/cli</code> (ships both the{" "}
-                  <code>opencode</code> and <code>opencode2</code> binaries).
-                  New sessions only.
+                  <code>pnpm add -g @opencode/cli</code>. New sessions only.
                 </p>
               </>
             )}

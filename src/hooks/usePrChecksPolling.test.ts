@@ -85,7 +85,16 @@ describe("usePrChecksPolling", () => {
 
     useStore.setState({
       prDetailsByWtId: new Map([
-        ["corral/hulling", { title: "t", body: "b", comments: [] }],
+        [
+          "corral/hulling",
+          {
+            title: "t",
+            body: "b",
+            author: "octocat",
+            review_decision: "REVIEW_REQUIRED",
+            comments: [],
+          },
+        ],
       ]),
     });
     act(() => vi.advanceTimersByTime(12_000));

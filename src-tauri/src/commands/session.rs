@@ -66,7 +66,7 @@ pub struct Session {
     /// PTY master writer, for `write_session`.
     writer: Mutex<Box<dyn Write + Send>>,
     /// The primary child process (`claude`, `opencode attach`, or the
-    /// `opencode2 --standalone` TUI).
+    /// `opencode` TUI).
     child: Mutex<Box<dyn Child + Send + Sync>>,
     /// The headless `opencode serve` process backing this session, when
     /// `harness` is Opencode. `None` for Claude sessions, which have no
@@ -81,7 +81,7 @@ pub struct Session {
     /// also means `kill()` below can treat both uniformly.
     opencode_server: Option<Mutex<Box<dyn Child + Send + Sync>>>,
     /// Unique marker (`CORRAL_OC2_TOKEN=<token>`) passed via the environment
-    /// to a spawned `opencode2 --standalone` TUI, so the detached `serve
+    /// to a spawned `opencode` TUI, so the detached `serve
     /// --stdio` child that TUI re-parents can be found and killed via /proc
     /// once the session ends. `Some` only for `Harness::Opencode2` sessions.
     opencode2_token: Option<String>,
@@ -161,7 +161,7 @@ impl Session {
     }
 
     /// Best-effort sweep-and-kill of every process still carrying this
-    /// session's `CORRAL_OC2_TOKEN` marker — the `opencode2 --standalone`
+    /// session's `CORRAL_OC2_TOKEN` marker — the `opencode`
     /// TUI's detached `serve --stdio` child (re-parented and abandoned by
     /// the TUI, so it outlives both the TUI and the node shim) and, if the
     /// TUI itself survived `child.kill()` above, the TUI process too.
@@ -379,7 +379,7 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> bool {
 }
 
 /// Env-var name for the per-session marker passed to a spawned
-/// `opencode2 --standalone` TUI. Inherited by every process the TUI spawns —
+/// `opencode` TUI. Inherited by every process the TUI spawns —
 /// including the detached `serve --stdio` it re-parents and abandons when
 /// the TUI (or corral) dies — so [`kill_opencode2_children`] can find and
 /// kill exactly the processes belonging to one session, regardless of how
@@ -387,7 +387,7 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> bool {
 const OPENCODE2_MARKER: &str = "CORRAL_OC2_TOKEN";
 
 /// SIGKILL every process whose environment carries the given session's
-/// `CORRAL_OC2_TOKEN` marker. `opencode2 --standalone` spawns a detached
+/// `CORRAL_OC2_TOKEN` marker. `opencode` spawns a detached
 /// `serve --stdio` child to host its backend; that child is `setsid`'d and
 /// deliberately survives the death of its parent (it re-parents to init), so
 /// killing the visible TUI process is not enough — the server would leak
@@ -627,7 +627,7 @@ pub async fn start_session(
     let mut opencode_session_id: Option<String> = None;
     let mut opencode_password: Option<String> = None;
     // Only populated for `Harness::Opencode2`: the unique `CORRAL_OC2_TOKEN`
-    // marker value passed to the `opencode2 --standalone` TUI (set in that
+    // marker value passed to the `opencode` TUI (set in that
     // arm below), used later to sweep up its detached `serve --stdio` child
     // on session end.
     let mut opencode2_token: Option<String> = None;
@@ -788,7 +788,7 @@ pub async fn start_session(
         }
         corral_core::harness::Harness::Opencode2 => {
             let opencode2_bin = if settings.opencode2_executable_path.trim().is_empty() {
-                "opencode2"
+                "opencode"
             } else {
                 settings.opencode2_executable_path.trim()
             };
@@ -892,6 +892,13 @@ pub async fn start_session(
             // needs it to distinguish this session's turn from its subagent
             // child sessions.
             opencode_session_id = Some(session_id.clone());
+
+            // opencode restores a persistent tab strip per working directory.
+            // Drop this worktree's entry before the TUI starts so tabs left
+            // over from earlier sessions (including ones corral already
+            // deleted) don't reappear next to the session we're attaching.
+            // The TUI adds the launched session back as the only tab.
+            corral_core::opencode::forget_tabs_for_directory(&path);
 
             let mut cmd = CommandBuilder::new(opencode2_bin);
             cmd.args(["--server", &base_url, "--session", &session_id]);
@@ -1129,8 +1136,8 @@ fn spawn_reader(app: AppHandle, session: Arc<Session>, mut reader: Box<dyn Read 
                 None
             }
         };
-        // The primary `child` (`opencode attach`, or the `opencode2
-        // --standalone` TUI) just exited on its own — most commonly the user
+        // The primary `child` (`opencode attach`, or the opencode TUI) just
+        // exited on its own — most commonly the user
         // quit the TUI, or it crashed/lost its connection to the paired
         // server. `Session::kill()` never runs on this path (nobody called
         // Stop), so without this the paired `opencode serve` (and, for
@@ -1741,7 +1748,7 @@ mod tests {
     }
 
     /// The sweep must only kill processes bearing the session's own marker —
-    /// a different corral session's processes (and the user's own opencode2
+    /// a different corral session's processes (and the user's own opencode
     /// processes, which never carry a marker) must be left untouched.
     #[test]
     fn kill_opencode2_children_spares_unmarked_processes() {

@@ -106,6 +106,12 @@ pub struct PrComment {
 pub struct PrDetails {
     pub title: String,
     pub body: String,
+    /// GitHub login of the PR's author.
+    pub author: String,
+    /// GitHub's review decision: `APPROVED`, `CHANGES_REQUESTED`,
+    /// `REVIEW_REQUIRED`, or an empty string when no review is required.
+    #[serde(default)]
+    pub review_decision: String,
     pub comments: Vec<PrComment>,
 }
 
@@ -127,15 +133,21 @@ struct GhComment {
 struct GhPrView {
     title: String,
     body: String,
+    author: GhAuthor,
+    #[serde(rename = "reviewDecision", default)]
+    review_decision: String,
     comments: Vec<GhComment>,
 }
 
-/// Maps `gh pr view --json title,body,comments`'s stdout.
+/// Maps `gh pr view --json title,body,author,reviewDecision,comments`'s
+/// stdout.
 pub fn pr_details_from_json(json: &str) -> Result<PrDetails> {
     let raw: GhPrView = serde_json::from_str(json)?;
     Ok(PrDetails {
         title: raw.title,
         body: raw.body,
+        author: raw.author.login,
+        review_decision: raw.review_decision,
         comments: raw
             .comments
             .into_iter()
@@ -224,13 +236,18 @@ pub fn pr_checks(dir: &Path) -> Result<Vec<CheckRun>> {
     checks_from_json(&String::from_utf8(output.stdout)?)
 }
 
-/// The open PR's title, body, and issue comments —
-/// `gh pr view --json title,body,comments`. `Ok(None)` means "no PR yet"
-/// (mirrors `pr_status`'s convention), so the frontend can distinguish it
-/// from a real `gh` failure.
+/// The open PR's title, body, author, review decision, and issue comments —
+/// `gh pr view --json title,body,author,reviewDecision,comments`. `Ok(None)`
+/// means "no PR yet" (mirrors `pr_status`'s convention), so the frontend can
+/// distinguish it from a real `gh` failure.
 pub fn pr_details(dir: &Path) -> Result<Option<PrDetails>> {
     let output = Command::new("gh")
-        .args(["pr", "view", "--json", "title,body,comments"])
+        .args([
+            "pr",
+            "view",
+            "--json",
+            "title,body,author,reviewDecision,comments",
+        ])
         .current_dir(dir)
         .output()?;
     if !output.status.success() {
@@ -390,10 +407,12 @@ mod tests {
 
     #[test]
     fn pr_details_from_json_maps_title_body_and_comments() {
-        let json = r###"{"title":"Add feature","body":"## Summary\n- did a thing","comments":[{"author":{"login":"github-actions"},"body":"CI note","createdAt":"2026-07-15T00:00:00Z","url":"https://x/c1"}]}"###;
+        let json = r###"{"title":"Add feature","body":"## Summary\n- did a thing","author":{"login":"octocat"},"reviewDecision":"REVIEW_REQUIRED","comments":[{"author":{"login":"github-actions"},"body":"CI note","createdAt":"2026-07-15T00:00:00Z","url":"https://x/c1"}]}"###;
         let details = pr_details_from_json(json).unwrap();
         assert_eq!(details.title, "Add feature");
         assert_eq!(details.body, "## Summary\n- did a thing");
+        assert_eq!(details.author, "octocat");
+        assert_eq!(details.review_decision, "REVIEW_REQUIRED");
         assert_eq!(details.comments.len(), 1);
         assert_eq!(details.comments[0].author, "github-actions");
         assert_eq!(details.comments[0].body, "CI note");
@@ -401,8 +420,12 @@ mod tests {
 
     #[test]
     fn pr_details_from_json_handles_no_comments() {
-        let json = r#"{"title":"t","body":"b","comments":[]}"#;
-        assert!(pr_details_from_json(json).unwrap().comments.is_empty());
+        let json = r#"{"title":"t","body":"b","author":{"login":"a"},"comments":[]}"#;
+        let details = pr_details_from_json(json).unwrap();
+        assert!(details.comments.is_empty());
+        // `reviewDecision` is absent when no review is required — defaults to
+        // empty rather than failing the whole parse.
+        assert_eq!(details.review_decision, "");
     }
 
     #[test]

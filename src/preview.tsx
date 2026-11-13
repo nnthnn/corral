@@ -28,6 +28,7 @@ import { Highlight } from "./components/Highlight";
 import { LassoSpinner } from "./components/LassoSpinner";
 import { PathLabel } from "./components/PathLabel";
 import { ProjectIcon } from "./components/ProjectIcon";
+import { PrPane } from "./components/PrPane";
 import { RightSlotIndicator } from "./components/RightSlotIndicator";
 import {
   BellSpinner,
@@ -39,11 +40,13 @@ import {
   WindmillSpinner,
   WrenchSpinner,
 } from "./components/spinners";
-import type { SyncState } from "./types";
+import { useStore } from "./store";
+import type { CheckRun, PrDetails, PrInfo, SyncState, Worktree } from "./types";
 import type {
   FeatureStatus,
   RightSlotIndicator as RightSlotIndicatorValue,
 } from "./utils";
+import { wtId } from "./utils";
 
 /** Standalone gallery of corral's pure presentational components — mounted
  * via `preview.html` instead of `index.html` so it never calls `bootstrap()`
@@ -369,9 +372,105 @@ const RIGHT_SLOT_DETAIL: Record<RightSlotIndicatorValue["kind"], string> = {
   none: "Nothing applies — no indicator shown.",
 };
 
+/** Mock worktree + PR data for the PR-page preview below. `PrPane` renders
+ * from the zustand caches (and skips its fetch when `active={false}`), so
+ * populating them here lets the page be inspected in a plain browser without
+ * a Tauri runtime or an actual open PR. */
+const PR_PREVIEW_WT: Worktree = {
+  project: "corral",
+  feature: "keyboard-worktree-switching",
+  slug: "keyboard-worktree-switching",
+  branch: "feat/keyboard-worktree-switching",
+  path: "/home/you/corral/corral/keyboard-worktree-switching",
+  status: null,
+  has_resumable_session: false,
+  note: "",
+  title: "Keyboard-driven worktree switching",
+};
+
+const PR_PREVIEW_INFO: PrInfo = {
+  number: 128,
+  url: "https://github.com/nnthnn/corral/pull/128",
+  state: "open",
+  is_draft: false,
+};
+
+const PR_PREVIEW_DETAILS: PrDetails = {
+  title: "Add keyboard-driven worktree switching",
+  author: "nnthnn",
+  // Most PRs have no required approvals — this is the common summary card.
+  // Set to "REVIEW_REQUIRED" to preview the Approval-required variant.
+  review_decision: "",
+  body: [
+    "## Summary",
+    "- Adds `Ctrl+1–9` worktree jumps and `Ctrl+[` / `Ctrl+]` prev/next.",
+    "- Keeps the palette's fuzzy ranking in sync with the sidebar order.",
+    "",
+    "## Testing",
+    "1. Open a project with three or more worktrees.",
+    "2. Press `Ctrl+3` — focus should land on the third row.",
+    "3. `Ctrl+]` cycles forward, wrapping at the end.",
+    "",
+    "> Screenshots and a short clip are in the PR description on GitHub.",
+  ].join("\n"),
+  comments: [
+    {
+      author: "octocat",
+      body: "This feels great. Could we also show the shortcut in the hover card?",
+      created_at: "2026-11-12T03:24:00Z",
+      url: "https://github.com/nnthnn/corral/pull/128#issuecomment-1",
+    },
+    {
+      author: "github-actions",
+      body: "### Build & test\n\nAll checks passed on the latest commit.",
+      created_at: "2026-11-12T04:10:00Z",
+      url: "https://github.com/nnthnn/corral/pull/128#issuecomment-2",
+    },
+  ],
+};
+
+const PR_PREVIEW_CHECKS: CheckRun[] = [
+  {
+    name: "build (ubuntu-latest)",
+    workflow: "CI",
+    bucket: "pass",
+    url: "https://github.com/nnthnn/corral/actions",
+  },
+  {
+    name: "clippy",
+    workflow: "CI",
+    bucket: "pass",
+    url: "https://github.com/nnthnn/corral/actions",
+  },
+  {
+    name: "frontend tests",
+    workflow: "CI",
+    bucket: "pass",
+    url: "https://github.com/nnthnn/corral/actions",
+  },
+  {
+    name: "bundle",
+    workflow: "Release",
+    bucket: "pass",
+    url: "https://github.com/nnthnn/corral/actions",
+  },
+  {
+    name: "docs",
+    workflow: "Docs",
+    bucket: "skipping",
+    url: "https://github.com/nnthnn/corral/actions",
+  },
+];
+
+useStore.setState({
+  prInfoByWtId: new Map([[wtId(PR_PREVIEW_WT), PR_PREVIEW_INFO]]),
+  prDetailsByWtId: new Map([[wtId(PR_PREVIEW_WT), PR_PREVIEW_DETAILS]]),
+  checksByWtId: new Map([[wtId(PR_PREVIEW_WT), PR_PREVIEW_CHECKS]]),
+});
+
 function Preview() {
   return (
-    <main className="p-6 max-w-3xl mx-auto flex flex-col">
+    <main className="p-6 max-w-6xl mx-auto flex flex-col">
       <h1 className="text-lg font-semibold mb-6">Component Preview</h1>
 
       <Section title="Button variants">
@@ -473,6 +572,21 @@ function Preview() {
       <Section title="Highlight">
         <Highlight text="feat/tilling-worktree" needle="tilling" />
       </Section>
+
+      <section className="flex flex-col gap-3 pb-6 mb-6 border-b border-border">
+        <h2 className="text-sm font-semibold text-muted uppercase tracking-wide">
+          PR page (mock data)
+        </h2>
+        <p className="text-caption text-muted leading-snug">
+          Rendered from the zustand caches with no Tauri calls. Expand{" "}
+          <code>Checks</code> or follow the <code>Comments</code> link to the
+          timeline; GitHub actions (open, mark ready, add to chat) are inert
+          here.
+        </p>
+        <div className="h-[760px] w-full overflow-hidden rounded-lg border border-border bg-bg">
+          <PrPane wt={PR_PREVIEW_WT} active={false} />
+        </div>
+      </section>
     </main>
   );
 }

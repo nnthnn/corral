@@ -112,8 +112,8 @@ pub struct Settings {
     pub opencode_executable_path: String,
     /// Path or command name used to spawn OpenCode v2 sessions when
     /// `harness == Opencode2`. Empty string means "use the default"
-    /// (`opencode2`, resolved via `PATH`; the released `@opencode/cli` ships
-    /// both the `opencode` and `opencode2` binaries).
+    /// (`opencode`, resolved via `PATH`; current `@opencode/cli` releases no
+    /// longer ship the old `opencode2` alias).
     pub opencode2_executable_path: String,
     /// Path or command name used to spawn Pi sessions when `harness == Pi`.
     /// Empty string means "use the default" (`pi`, resolved via `PATH`).
