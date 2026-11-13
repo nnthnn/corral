@@ -10,12 +10,12 @@ pub enum Harness {
     /// points the executable at an actual v1 install.
     Opencode,
     /// OpenCode v2, driven as an embedded TUI pointed at a dedicated
-    /// `opencode2 serve` instance (`opencode2 --server <url> --session <id>`).
+    /// `opencode serve` instance (`opencode --server <url> --session <id>`).
     /// The V2 CLI ships its own TUI, so corral embeds it rather than rendering
     /// the conversation itself (the earlier chat-in-terminal HTTP relay was
     /// removed because it couldn't match the real TUI's formatting). The
-    /// released `@opencode/cli` package ships both the `opencode` and
-    /// `opencode2` binaries pointing at the same v2 executable.
+    /// `opencode` binary is the v2 CLI now; the `opencode2` compatibility
+    /// alias is no longer shipped by current releases.
     Opencode2,
     /// Pi (https://pi.dev), embedded as its interactive TUI. Pi is a
     /// self-contained CLI like Claude Code: fresh sessions get corral's
@@ -80,7 +80,7 @@ impl Harness {
         match self {
             Harness::Claude => "claude",
             Harness::Opencode => "opencode",
-            Harness::Opencode2 => "opencode2",
+            Harness::Opencode2 => "opencode",
             Harness::Pi => "pi",
             Harness::Unknown(_) => "",
         }
@@ -100,9 +100,9 @@ impl Harness {
                  its path under Settings → Agent executable."
             }
             Harness::Opencode2 => {
-                "Install OpenCode via pnpm (`pnpm add -g @opencode/cli`, which \
-                 ships both the `opencode` and `opencode2` binaries) or set a \
-                 custom path under Settings → Agent executable."
+                "Install OpenCode via pnpm (`pnpm add -g @opencode/cli`, then \
+                 run `opencode`) or set a custom path under Settings → Agent \
+                 executable."
             }
             Harness::Pi => {
                 "Install Pi with `curl -fsSL https://pi.dev/install.sh | sh` \
@@ -142,6 +142,13 @@ mod tests {
     #[test]
     fn default_is_claude() {
         assert_eq!(Harness::default(), Harness::Claude);
+    }
+
+    #[test]
+    fn opencode_v2_defaults_to_the_opencode_binary() {
+        // Current `@opencode/cli` releases no longer ship the `opencode2`
+        // alias; `opencode` *is* the v2 CLI.
+        assert_eq!(Harness::Opencode2.default_executable(), "opencode");
     }
 
     #[test]

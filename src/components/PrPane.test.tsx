@@ -34,6 +34,8 @@ const wt: Worktree = {
 const details: PrDetails = {
   title: "Add feature",
   body: "## Summary\n- did a thing",
+  author: "octocat",
+  review_decision: "REVIEW_REQUIRED",
   comments: [
     {
       author: "github-actions",
@@ -95,13 +97,15 @@ describe("PrPane", () => {
     expect(screen.getByText("Add feature")).toBeInTheDocument();
   });
 
-  it("defaults to the Checks pill, grouping rows into Passed/Failed/In progress sections", () => {
+  it("keeps checks collapsed until the summary card's Checks segment is opened", () => {
     useStore.setState({
       checksByWtId: new Map([
         ["corral/hulling", [passCheck, failCheck, pendingCheck]],
       ]),
     });
     render(<PrPane wt={wt} />);
+    expect(screen.queryByText("Passed 1")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Checks" }));
     expect(screen.getByText("Passed 1")).toBeInTheDocument();
     expect(screen.getByText("Failed 1")).toBeInTheDocument();
     expect(screen.getByText("In progress 1")).toBeInTheDocument();
@@ -110,12 +114,12 @@ describe("PrPane", () => {
     expect(screen.getByText("lint")).toBeInTheDocument();
   });
 
-  it("shows the Checks pill's pass ratio", () => {
+  it("shows the checks pass ratio in the summary card", () => {
     useStore.setState({
       checksByWtId: new Map([["corral/hulling", [passCheck, failCheck]]]),
     });
     render(<PrPane wt={wt} />);
-    expect(screen.getByText("Checks 1/2")).toBeInTheDocument();
+    expect(screen.getByText("1/2 passed")).toBeInTheDocument();
   });
 
   it("shows a 'Checks running' indicator in the header while a check is pending", () => {
@@ -148,11 +152,12 @@ describe("PrPane", () => {
     expect(screen.queryByText("Checks running")).not.toBeInTheDocument();
   });
 
-  it("only shows an Add to chat button on failed checks", () => {
+  it("only shows an Add to chat button on failed checks once checks are open", () => {
     useStore.setState({
       checksByWtId: new Map([["corral/hulling", [passCheck, failCheck]]]),
     });
     render(<PrPane wt={wt} />);
+    fireEvent.click(screen.getByRole("button", { name: "Checks" }));
     expect(screen.getAllByText("Add to chat")).toHaveLength(1);
   });
 
@@ -161,16 +166,16 @@ describe("PrPane", () => {
       checksByWtId: new Map([["corral/hulling", [failCheck]]]),
     });
     render(<PrPane wt={wt} />);
+    fireEvent.click(screen.getByRole("button", { name: "Checks" }));
     fireEvent.click(screen.getByText("Add to chat"));
     expect(checks.addCheckToChat).toHaveBeenCalledWith(wt, failCheck);
   });
 
-  it("switches to the Activity pill and renders comment rows", () => {
+  it("renders comment rows below the description", () => {
     useStore.setState({
       prDetailsByWtId: new Map([["corral/hulling", details]]),
     });
     render(<PrPane wt={wt} />);
-    fireEvent.click(screen.getByText("Activity"));
     // Comment bodies render as markdown, not raw preformatted text.
     expect(screen.getByText("CI note").tagName).toBe("P");
   });
@@ -180,27 +185,79 @@ describe("PrPane", () => {
       prDetailsByWtId: new Map([["corral/hulling", details]]),
     });
     render(<PrPane wt={wt} />);
-    fireEvent.click(screen.getByText("Activity"));
     fireEvent.click(screen.getByText("Add to chat"));
     expect(checks.addCommentsToChat).toHaveBeenCalledWith([
       details.comments[0],
     ]);
   });
 
-  it("switches to the Description pill and renders the PR body", () => {
+  it("renders the PR body as an unheaded description card", () => {
     useStore.setState({
       prDetailsByWtId: new Map([["corral/hulling", details]]),
     });
     render(<PrPane wt={wt} />);
-    fireEvent.click(screen.getByText("Description"));
     // The `## Summary` heading and `-` list are rendered as real elements.
     expect(
       screen.getByRole("heading", { name: "Summary" }),
     ).toBeInTheDocument();
     expect(screen.getByText(/did a thing/)).toBeInTheDocument();
+    // The description itself has no author/"opened this pull request" chrome.
+    expect(
+      screen.queryByText("opened this pull request"),
+    ).not.toBeInTheDocument();
   });
 
-  it("Add all comments to chat sends every comment, regardless of the active pill", () => {
+  it("shows Approval required in the summary card when review is required and checks pass", () => {
+    useStore.setState({
+      prDetailsByWtId: new Map([["corral/hulling", details]]),
+      checksByWtId: new Map([["corral/hulling", [passCheck]]]),
+    });
+    render(<PrPane wt={wt} />);
+    expect(screen.getByText("Approval required")).toBeInTheDocument();
+    expect(screen.getByText("Review required")).toBeInTheDocument();
+  });
+
+  it("shows All checks have passed when no review is required", () => {
+    useStore.setState({
+      prDetailsByWtId: new Map([
+        ["corral/hulling", { ...details, review_decision: "" }],
+      ]),
+      checksByWtId: new Map([["corral/hulling", [passCheck]]]),
+    });
+    render(<PrPane wt={wt} />);
+    expect(screen.getByText("All checks have passed")).toBeInTheDocument();
+    // No review required → no empty Approvals column.
+    expect(
+      screen.queryByRole("button", { name: "Approvals" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows Ready to merge when there are no checks or required reviews", () => {
+    useStore.setState({
+      prDetailsByWtId: new Map([
+        ["corral/hulling", { ...details, review_decision: "" }],
+      ]),
+    });
+    render(<PrPane wt={wt} />);
+    expect(screen.getByText("Ready to merge")).toBeInTheDocument();
+    expect(
+      screen.getByText("No required checks or reviews."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows Checks failed in the summary card when a check fails", () => {
+    useStore.setState({
+      prDetailsByWtId: new Map([
+        ["corral/hulling", { ...details, review_decision: "" }],
+      ]),
+      checksByWtId: new Map([["corral/hulling", [failCheck]]]),
+    });
+    render(<PrPane wt={wt} />);
+    expect(screen.getByText("Checks failed")).toBeInTheDocument();
+    expect(screen.getByText("1 check did not pass.")).toBeInTheDocument();
+  });
+
+  it("Add all comments to chat sends every comment", () => {
     const twoComments: PrDetails = {
       ...details,
       comments: [

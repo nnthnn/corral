@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::Value;
-use uuid::Uuid;
 
 use crate::error::{Error, Result};
 
@@ -360,113 +359,70 @@ pub fn session_status(base_url: &str, id: &str) -> Result<Option<Value>> {
     Ok(body.get(id).cloned())
 }
 
-/// Best-effort removal of every opencode2 session whose directory is
-/// `directory` (itself or any subdirectory), so removing a worktree doesn't
-/// leave its old agent conversations behind in opencode2's own session
-/// store — a future worktree reusing the same feature name (and thus the
-/// same path) would otherwise resurface them.
+/// Best-effort removal of every opencode session whose directory is
+/// `directory` (itself or any subdirectory), plus this directory's persistent
+/// TUI tab strip, so removing a worktree doesn't leave its old agent
+/// conversations behind in opencode's own session store — a future worktree
+/// reusing the same feature name (and thus the same path) would otherwise
+/// resurface them.
 ///
-/// Spawns a short-lived `opencode2 serve`, drives its session API over
-/// localhost (list, then delete each matching session), and kills the
-/// server. Every step is best-effort: any failure (no `opencode2` binary,
-/// server won't start, list/delete error) is logged at debug and swallowed,
-/// matching the remove flow's other best-effort cleanup.
+/// Uses opencode's own `session list` / `session delete` CLI rather than the
+/// server's HTTP API: those are the supported session-management commands, and
+/// they keep working across releases (the internal API paths corral used to
+/// drive changed shape more than once). `--standalone` runs each command
+/// against a short-lived private server backed by the shared session store, so
+/// no external server needs to be running. `session list` reports every
+/// top-level session in the current project (all worktrees of a repo share one
+/// project), so the JSON is filtered down to `directory`; `session delete`
+/// removes a session together with its child/subagent sessions.
+///
+/// Every step is best-effort: any failure (no binary, list/delete error) is
+/// logged at debug and swallowed, matching the remove flow's other best-effort
+/// cleanup. Runs before the directory itself is removed, since `session list`
+/// runs with the worktree as its cwd.
 pub fn remove_sessions_for_directory(directory: &Path) {
-    let Some(bin) = opencode2_bin() else {
-        tracing::debug!("opencode cleanup: no opencode2 binary; skipping");
-        return;
-    };
-
-    let Ok(port) = free_port() else {
-        tracing::debug!("opencode cleanup: free_port failed; skipping");
-        return;
-    };
-    let base_url = base_url(port);
-    let password = Uuid::new_v4().to_string();
-
-    let mut server = match Command::new(&bin)
-        .args([
-            "serve",
-            "--hostname",
-            "127.0.0.1",
-            "--port",
-            &port.to_string(),
-        ])
-        .env("OPENCODE_PASSWORD", &password)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(e) => {
-            tracing::debug!("opencode cleanup: failed to spawn {}: {e}", bin.display());
-            return;
+    match opencode_bin() {
+        Some(bin) => {
+            for session_id in list_session_ids_for_directory(&bin, directory) {
+                if let Err(e) = delete_session(&bin, directory, &session_id) {
+                    tracing::debug!("opencode cleanup: delete {session_id} failed: {e}");
+                }
+            }
         }
-    };
-
-    if let Err(e) = wait_until_ready_with_password(&base_url, &password, Duration::from_secs(10)) {
-        tracing::debug!("opencode cleanup: server at {base_url} not ready: {e}");
-        let _ = server.kill();
-        let _ = server.wait();
-        return;
+        None => tracing::debug!("opencode cleanup: no opencode binary; skipping session delete"),
     }
 
-    for session_id in list_session_ids_for_directory(&base_url, &password, directory) {
-        if let Err(e) = delete_session(&base_url, &password, &session_id) {
-            tracing::debug!("opencode cleanup: delete {session_id} failed: {e}");
-        }
-    }
-
-    let _ = server.kill();
-    let _ = server.wait();
+    // Runs even if the binary is missing: a leftover tab strip should still be
+    // cleared when its worktree goes away.
+    forget_tabs_for_directory(directory);
 }
 
-/// Resolve the `opencode2` binary from settings (respecting
-/// `opencode2_executable_path`), or `None` if it can't be found.
-fn opencode2_bin() -> Option<std::path::PathBuf> {
+/// Resolve the `opencode` binary from settings (respecting
+/// `opencode2_executable_path`, the setting name kept for backwards
+/// compatibility), or `None` if it can't be found.
+fn opencode_bin() -> Option<std::path::PathBuf> {
     let settings = crate::settings::load().ok()?;
     let bin = if settings.opencode2_executable_path.trim().is_empty() {
-        "opencode2"
+        "opencode"
     } else {
         settings.opencode2_executable_path.trim()
     };
     crate::bin::resolve_executable(bin)
 }
 
-/// List the session ids for `directory` (itself and any subdirectories) via
-/// the session API. Best-effort: returns an empty list on any failure.
-fn list_session_ids_for_directory(base_url: &str, password: &str, directory: &Path) -> Vec<String> {
-    let prefix = directory.to_string_lossy().into_owned();
-    let url = format!("{base_url}/api/session?limit=10000");
-    let mut response = match http_agent()
-        .get(&url)
-        .header("Authorization", &basic_auth(password))
-        .call()
-    {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::debug!("opencode cleanup: list sessions failed: {e}");
-            return Vec::new();
-        }
-    };
-    let body: Value = match response.body_mut().read_json() {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::debug!("opencode cleanup: list sessions: bad response: {e}");
-            return Vec::new();
-        }
-    };
-    body.get("data")
-        .and_then(Value::as_array)
+/// Session ids whose directory is `directory` (itself or any subdirectory).
+/// Pure so the JSON shape — the part most likely to drift between opencode
+/// versions — is unit-tested without spawning a server.
+fn session_ids_for_directory(list: &Value, directory: &Path) -> Vec<String> {
+    list.as_array()
         .map(|sessions| {
             sessions
                 .iter()
                 .filter(|s| {
-                    let dir = s
-                        .pointer("/location/directory")
+                    s.get("directory")
                         .and_then(Value::as_str)
-                        .unwrap_or("");
-                    dir == prefix || dir.starts_with(&format!("{prefix}/"))
+                        .map(|dir| Path::new(dir).starts_with(directory))
+                        .unwrap_or(false)
                 })
                 .filter_map(|s| s.get("id").and_then(Value::as_str).map(str::to_string))
                 .collect()
@@ -474,25 +430,154 @@ fn list_session_ids_for_directory(base_url: &str, password: &str, directory: &Pa
         .unwrap_or_default()
 }
 
-/// Delete one session by id.
-///
-/// A `404` is treated as success, not an error: the desired end state is "this
-/// session no longer exists", and a session can already be gone for reasons
-/// outside this call — a retried worktree removal whose first cleanup already
-/// deleted it, or opencode's own teardown racing the list→delete window. Only
-/// genuine failures are surfaced (still best-effort at the call site).
-fn delete_session(base_url: &str, password: &str, session_id: &str) -> Result<()> {
-    let url = format!("{base_url}/api/session/{session_id}");
-    match http_agent()
-        .delete(&url)
-        .header("Authorization", &basic_auth(password))
-        .call()
+/// List the session ids for `directory` via the CLI. Best-effort: returns an
+/// empty list on any failure.
+fn list_session_ids_for_directory(bin: &Path, directory: &Path) -> Vec<String> {
+    let output = match Command::new(bin)
+        .args([
+            "session",
+            "list",
+            "--standalone",
+            "--format",
+            "json",
+            "-n",
+            "100000",
+        ])
+        .current_dir(directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
     {
-        Ok(_) => Ok(()),
-        Err(ureq::Error::StatusCode(404)) => Ok(()),
-        Err(e) => Err(Error::Other(format!(
-            "opencode: delete session {session_id} failed: {e}"
-        ))),
+        Ok(output) if output.status.success() => output,
+        Ok(output) => {
+            tracing::debug!(
+                "opencode cleanup: `session list` exited {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            return Vec::new();
+        }
+        Err(e) => {
+            tracing::debug!(
+                "opencode cleanup: failed to run {} session list: {e}",
+                bin.display()
+            );
+            return Vec::new();
+        }
+    };
+    let list: Value = match serde_json::from_slice(&output.stdout) {
+        Ok(value) => value,
+        Err(e) => {
+            tracing::debug!("opencode cleanup: `session list` returned invalid JSON: {e}");
+            return Vec::new();
+        }
+    };
+    session_ids_for_directory(&list, directory)
+}
+
+/// Delete one session (and its child sessions) via the CLI.
+fn delete_session(bin: &Path, directory: &Path, session_id: &str) -> Result<()> {
+    let output = Command::new(bin)
+        .args(["session", "delete", "--standalone", session_id])
+        .current_dir(directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| Error::Other(format!("opencode: session delete {session_id}: {e}")))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(Error::Other(format!(
+            "opencode: session delete {session_id} exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )))
+    }
+}
+
+/// Drop `directory`'s persistent opencode TUI tab-strip entry.
+///
+/// opencode v2 remembers open session tabs per working directory in
+/// `$XDG_STATE_HOME/opencode/<channel>/tui/tabs.json` (`~/.local/state` by
+/// default). Deleting a session from the store does not remove its tab, so
+/// without this a worktree would reopen with tabs for conversations that no
+/// longer exist — and a fresh corral session would show them next to the
+/// session it just launched.
+///
+/// Called both before launching (so a new/resumed session starts with a clean
+/// strip; the TUI adds the launched session back as the only tab) and when
+/// removing a worktree. Best-effort: a missing or unreadable file is normal,
+/// and a write failure is only logged.
+///
+/// Only the default `tabs.scope: "cwd"` layout is per-directory; a user who
+/// switched opencode to `tabs.scope: "global"` shares one strip across every
+/// project, and corral leaves those entries alone rather than guessing which
+/// tabs belong to this worktree.
+pub fn forget_tabs_for_directory(directory: &Path) {
+    // `dirs::state_dir()` is Linux/Windows-only; opencode itself still uses
+    // `~/.local/state` on macOS, so fall back to that.
+    let Some(state) = dirs::state_dir()
+        .or_else(|| dirs::home_dir().map(|home| home.join(".local").join("state")))
+    else {
+        return;
+    };
+    let opencode_state = state.join("opencode");
+    forget_tabs_in(&opencode_state, directory);
+    // opencode stores the real path; a worktree reached through a symlinked
+    // parent would otherwise not match.
+    if let Ok(canonical) = directory.canonicalize()
+        && canonical != directory
+    {
+        forget_tabs_in(&opencode_state, &canonical);
+    }
+}
+
+/// Walk every opencode release channel under `<state>/opencode` (e.g.
+/// `latest`, `beta`) and prune `directory` from each one's tab strip.
+fn forget_tabs_in(opencode_state: &Path, directory: &Path) {
+    let Ok(entries) = std::fs::read_dir(opencode_state) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let tabs_path = entry.path().join("tui").join("tabs.json");
+        if tabs_path.is_file() {
+            forget_tabs_in_file(&tabs_path, directory);
+        }
+    }
+}
+
+/// Remove the `cwd` entries for `directory` (and anything beneath it) from one
+/// `tabs.json`, preserving every other project's tabs.
+fn forget_tabs_in_file(tabs_path: &Path, directory: &Path) {
+    let Ok(raw) = std::fs::read_to_string(tabs_path) else {
+        return;
+    };
+    let Ok(mut tabs) = serde_json::from_str::<Value>(&raw) else {
+        return;
+    };
+    let Some(cwd) = tabs.get_mut("cwd").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let before = cwd.len();
+    cwd.retain(|key, _| !Path::new(key).starts_with(directory));
+    if cwd.len() == before {
+        return;
+    }
+    match serde_json::to_vec(&tabs) {
+        Ok(bytes) => {
+            if let Err(e) = std::fs::write(tabs_path, bytes) {
+                tracing::debug!(
+                    "opencode cleanup: failed to rewrite {}: {e}",
+                    tabs_path.display()
+                );
+            }
+        }
+        Err(e) => tracing::debug!(
+            "opencode cleanup: failed to serialize {}: {e}",
+            tabs_path.display()
+        ),
     }
 }
 
@@ -527,11 +612,11 @@ mod tests {
         panic!("port from free_port() was not bindable after 5 attempts: {last_err:?}");
     }
 
-    /// The V2 tests below need the `opencode2` binary on PATH (same
+    /// The V2 tests below need the `opencode` binary on PATH (same
     /// skip-don't-fail tradeoff as any test depending on an external CLI tool
     /// not every dev machine/CI runner has).
-    fn opencode2_available() -> bool {
-        Command::new("opencode2")
+    fn opencode_available() -> bool {
+        Command::new("opencode")
             .arg("--version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -564,7 +649,7 @@ mod tests {
         // developer's real opencode store with `/tmp/.tmpXXXX` sessions.
         let db_dir = tempfile::tempdir().unwrap();
         let db_path = db_dir.path().join("opencode.db");
-        let child = Command::new("opencode2")
+        let child = Command::new("opencode")
             .args([
                 "serve",
                 "--port",
@@ -590,8 +675,8 @@ mod tests {
 
     #[test]
     fn create_session_v2_then_put_instruction_entry_round_trip() {
-        if !opencode2_available() {
-            eprintln!("skipping: opencode2 not on PATH");
+        if !opencode_available() {
+            eprintln!("skipping: opencode not on PATH");
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -640,22 +725,63 @@ mod tests {
     }
 
     #[test]
-    fn delete_session_treats_a_missing_session_as_success() {
-        if !opencode2_available() {
-            eprintln!("skipping: opencode2 not on PATH");
-            return;
-        }
-        let server = spawn_test_server_v2();
-        let dir = tempfile::tempdir().unwrap();
-        let id = super::create_session_v2(&server.base_url, &server.password, dir.path()).unwrap();
+    fn session_ids_for_directory_matches_the_directory_and_its_children() {
+        let list = serde_json::json!([
+            { "id": "ses_here", "directory": "/w/proj/feat" },
+            { "id": "ses_sub", "directory": "/w/proj/feat/crates/core" },
+            { "id": "ses_sibling", "directory": "/w/proj/feat-2" },
+            { "id": "ses_other", "directory": "/w/other/feat" },
+            { "id": "ses_missing_dir" },
+        ]);
+        assert_eq!(
+            super::session_ids_for_directory(&list, std::path::Path::new("/w/proj/feat")),
+            vec!["ses_here".to_string(), "ses_sub".to_string()]
+        );
+        // A non-object payload (e.g. an error shape) is treated as empty, not a
+        // panic.
+        assert!(
+            super::session_ids_for_directory(&serde_json::json!({}), std::path::Path::new("/w"))
+                .is_empty()
+        );
+    }
 
-        // First delete genuinely removes it; the second 404s server-side.
-        super::delete_session(&server.base_url, &server.password, &id).unwrap();
-        // "Already gone" is the desired end state, not a failure — a retried
-        // worktree removal hits exactly this and must not log an error.
-        super::delete_session(&server.base_url, &server.password, &id).unwrap();
-        // Same for an id that never existed at all.
-        super::delete_session(&server.base_url, &server.password, "ses_does_not_exist").unwrap();
+    #[test]
+    fn forget_tabs_removes_only_the_directory_entry() {
+        let state = tempfile::tempdir().unwrap();
+        let tui = state.path().join("latest/tui");
+        std::fs::create_dir_all(&tui).unwrap();
+        let tabs_path = tui.join("tabs.json");
+        std::fs::write(
+            &tabs_path,
+            serde_json::json!({
+                "global": { "tabs": [], "unread": {} },
+                "cwd": {
+                    "/gone/worktree": {
+                        "tabs": [{ "sessionID": "ses_a", "title": "old" }],
+                        "unread": {}
+                    },
+                    "/gone/worktree/sub": {
+                        "tabs": [{ "sessionID": "ses_b", "title": "old sub" }],
+                        "unread": {}
+                    },
+                    "/keep/worktree": {
+                        "tabs": [{ "sessionID": "ses_c", "title": "keep" }],
+                        "unread": {}
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        super::forget_tabs_in(state.path(), std::path::Path::new("/gone/worktree"));
+
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&tabs_path).unwrap()).unwrap();
+        let cwd = value.get("cwd").unwrap().as_object().unwrap();
+        assert!(!cwd.contains_key("/gone/worktree"));
+        assert!(!cwd.contains_key("/gone/worktree/sub"));
+        assert!(cwd.contains_key("/keep/worktree"));
     }
 
     #[test]

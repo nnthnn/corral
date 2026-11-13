@@ -144,6 +144,11 @@ export interface PrComment {
 export interface PrDetails {
   title: string;
   body: string;
+  /** GitHub login of the PR's author. */
+  author: string;
+  /** `APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED`, or empty when no
+   * review is required. */
+  review_decision: string;
   comments: PrComment[];
 }
 
@@ -194,8 +199,8 @@ export interface Settings {
    * this explicitly. */
   opencode_executable_path: string;
   /** Path or command name used to spawn the OpenCode v2 agent server when
-   * `harness === "opencode2"`. Empty = default (`opencode2`, resolved via
-   * PATH). */
+   * `harness === "opencode2"`. Empty = default (`opencode`, resolved via
+   * PATH); the old `opencode2` alias is no longer shipped. */
   opencode2_executable_path: string;
   /** Path or command name used to spawn Pi sessions when `harness === "pi"`.
    * Empty = default (`pi`, resolved via PATH). */

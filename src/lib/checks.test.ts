@@ -149,7 +149,13 @@ describe("fetchPrChecks", () => {
 
 describe("fetchPrDetails", () => {
   it("fetches and caches PR details by wtId, returning an awaitable promise resolving true on success", async () => {
-    const details = { title: "t", body: "b", comments: [] };
+    const details = {
+      title: "t",
+      body: "b",
+      author: "octocat",
+      review_decision: "REVIEW_REQUIRED",
+      comments: [],
+    };
     vi.mocked(invoke).mockResolvedValueOnce(details);
     const result = fetchPrDetails(wt);
     expect(result).toBeInstanceOf(Promise);

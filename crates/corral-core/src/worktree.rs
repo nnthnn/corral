@@ -738,9 +738,9 @@ pub fn remove(project: &str, feature: &str, delete_branch: bool) -> Result<()> {
     let repo = config::repo_path(project)?;
     let worktrees_root = config::worktrees_root()?;
     let path = worktrees_root.join(project).join(feature);
-    // Bail before the opencode2 cleanup below if there's nothing to remove —
-    // otherwise a `WorktreeNotFound` would still spawn a short-lived
-    // `opencode2 serve` (which would list/delete zero sessions) for nothing.
+    // Bail before the opencode cleanup below if there's nothing to remove —
+    // otherwise a `WorktreeNotFound` would still shell out to `opencode
+    // session list` (which would list/delete zero sessions) for nothing.
     if !path.exists() {
         return Err(Error::WorktreeNotFound(format!("{project}/{feature}")));
     }

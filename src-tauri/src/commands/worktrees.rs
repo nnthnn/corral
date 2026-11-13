@@ -160,9 +160,9 @@ pub async fn create_worktree(
 }
 
 /// `async` + `spawn_blocking` for the same reason as `merge_worktree` below:
-/// `worktree::remove` now shells out to real `git push` (network) and spawns
-/// a short-lived `opencode2 serve` to clear the harness's session store, so
-/// it must not run on the GTK main-loop thread. The in-memory agent-session,
+/// `worktree::remove` now shells out to real `git push` (network) and runs
+/// opencode's `session list`/`session delete` to clear the harness's session
+/// store, so it must not run on the GTK main-loop thread. The in-memory agent-session,
 /// provision, and run registries are stopped first (fast, on the calling
 /// thread) before any `.await`, since `State` handles can't be held across an
 /// await point — and the running agent must be killed before its worktree
