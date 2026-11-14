@@ -1,4 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
+import { initBrowserPreview } from "./lib/browser-events";
 import { loadAll } from "./lib/data";
 import { initNotifications } from "./lib/notifications";
 import { initProvisioning } from "./lib/provisioning-events";
@@ -30,6 +31,7 @@ export async function bootstrap(): Promise<void> {
   // manual refresh.
   await listen("fs-changed", () => loadAll());
   await initWorktreeWatch();
+  await initBrowserPreview();
   await initProvisioning();
   await initRun();
   await loadAll();

@@ -20,6 +20,11 @@ export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
   build: {
     rollupOptions: {
+      // Two entries: the app shell and the browser window's chrome page.
+      input: {
+        main: new URL("./index.html", import.meta.url).pathname,
+        browser: new URL("./browser.html", import.meta.url).pathname,
+      },
       output: {
         manualChunks(id) {
           if (!id.includes("node_modules")) return undefined;
