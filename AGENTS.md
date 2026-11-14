@@ -69,6 +69,9 @@ corral/
 │   │   └── system.rs               # notify icon, clipboard paste, open editor/terminal
 │   ├── src/hook_listener.rs        # Unix-socket listener for Claude Code hook callbacks
 │   ├── src/opencode_events.rs      # opencode SSE stream -> session status (same sink as hooks)
+│   ├── src/browser_host.rs         # opencode's browser.* RPC -> embedded browser backend
+│   ├── src/browser_window.rs       # corral-owned WebKit browser window + child page webviews
+│   ├── src/browser_agent.js        # injected in-page snapshot/input/console/network bridge
 │   ├── src/idle_timeout.rs         # auto-stops sessions idle past the configured timeout
 │   ├── src/pr_poll.rs              # periodic PR-state fetch per remote worktree
 │   ├── src/conflict_poll.rs        # periodic `origin` fetch to keep conflict state fresh
@@ -85,7 +88,7 @@ corral/
     │                                #   (xterm.js), DiffViewer, dialogs, etc.
     ├── hooks/                      # useGlobalShortcuts, useHoverIntent, useDialogRef
     └── lib/                        # tauri.ts invoke wrappers, actions, event listeners
-                                     #   (session/run/provisioning/worktree-watch)
+                                     #   (session/run/provisioning/worktree-watch/browser-preview/browser-state)
 ```
 
 - **src-tauri package** is `corral-app`; its lib is `corral_app_lib`
@@ -93,7 +96,10 @@ corral/
 - **Frontend ↔ backend**: `invoke()` calls Tauri commands; the backend streams
   agent/run/provision output and worktree-watch/status changes via
   `session-output`, `session-exit`, `session-status`, `run-output`,
-  `provision-output`, and `worktree-watch` events.
+  `provision-output`, `worktree-watch`, `browser-preview`, and `browser-state`
+  events. The browser window is a separate local `browser.html` entry whose
+  chrome page (tab strip/address bar) is the only webview with browser
+  permissions; page webviews are remote and get no capability.
 
 ### Conventions
 
@@ -437,6 +443,15 @@ See `IDEAS.md` for the backlog. As of the latest work, implemented:
   waiting-vs-working status (Claude Code hooks; OpenCode's SSE stream via
   `opencode_events.rs`; Pi's bundled extension via `pi.rs`) instead of PTY
   output guessing, and an idle-timeout auto-stop.
+- **OpenCode browser tools (embedded)**: each OpenCode v2 session gets an
+  `experimental.browser` attachment (`browser_host.rs`). The browser itself is
+  a corral-owned WebKit window (`browser_window.rs`) with a tab strip + address
+  bar and one child page webview per OpenCode tab. The injected
+  `browser_agent.js` provides snapshots/refs, click/fill/select/check/press/
+  scroll, `evaluate`, screenshots (WebKit snapshot), console capture, and
+  fetch/XHR network metadata/bodies. `browser.preview` opens files in the
+  existing File tab. Chromium-only operations (`trace.*`, `cpu.*`, `heap.*`,
+  `lighthouse`) and downloads/capture files are reported as `unsupported`.
 - **3-pane shell**: sidebar (projects → worktrees) with a status dot, exit
   animation on removal, and a fading 🔔 attention cue; center pane with
   Agent / Run / Setup / Diff / File / PR tabs; right-hand branch-diff Changes pane

@@ -18,7 +18,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 corral-core = { workspace = true }
 base64 = { workspace = true }
-tauri = { version = "2", features = ["devtools"] }
+tauri = { version = "2", features = ["devtools", "unstable"] }
 tauri-plugin-opener = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -33,6 +33,11 @@ notify-rust = "4"
 ignore = "0.4"
 parking_lot = "0.12"
 ureq = { version = "3", features = ["json"] }
+uuid = { workspace = true }
+url = "2"
+webkit2gtk = "2"
+cairo-rs = { version = "0.18", features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

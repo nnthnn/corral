@@ -893,6 +893,21 @@ pub async fn start_session(
             // child sessions.
             opencode_session_id = Some(session_id.clone());
 
+            // The browser tools are corral-specific (embedded WebKit window,
+            // unsupported Chromium-only operations), so keep a dedicated
+            // instruction entry in scope for resumed sessions too — their
+            // original onboarding entry may predate this feature. Best-effort:
+            // a failure only means the model misses the extra guidance.
+            if let Err(e) = corral_core::opencode::put_instruction_entry(
+                &base_url,
+                &password,
+                &session_id,
+                "corral-browser",
+                corral_core::onboarding::BROWSER_INSTRUCTIONS,
+            ) {
+                tracing::warn!("start_session: failed to add browser instructions: {e}");
+            }
+
             // opencode restores a persistent tab strip per working directory.
             // Drop this worktree's entry before the TUI starts so tabs left
             // over from earlier sessions (including ones corral already
@@ -1077,13 +1092,33 @@ pub async fn start_session(
     );
     if let Some(base_url) = opencode_base_url {
         match opencode_session_id {
-            Some(root_session_id) => crate::opencode_events::spawn(
-                app.clone(),
-                id.clone(),
-                root_session_id,
-                base_url,
-                opencode_password,
-            ),
+            Some(root_session_id) => {
+                crate::opencode_events::spawn(
+                    app.clone(),
+                    id.clone(),
+                    root_session_id.clone(),
+                    base_url.clone(),
+                    opencode_password.clone(),
+                );
+                // OpenCode's built-in `browser.*` tools (including
+                // `browser.preview`) only exist while a desktop client is
+                // attached. Only V2 has that protocol — V1 sessions have no
+                // password and are skipped.
+                if let Some(password) = opencode_password {
+                    crate::browser_host::spawn(
+                        app.clone(),
+                        id.clone(),
+                        session.project.clone(),
+                        session.feature.clone(),
+                        path.clone(),
+                        crate::browser_host::OpenCodeSession {
+                            root_session_id,
+                            base_url,
+                            password,
+                        },
+                    );
+                }
+            }
             None => tracing::warn!(
                 "start_session: opencode server at {base_url} has no root session id; status updates disabled"
             ),

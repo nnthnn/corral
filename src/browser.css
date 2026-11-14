@@ -1,0 +1,164 @@
+:root {
+  color-scheme: dark;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 13px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #0d0f12;
+  color: #d8dee9;
+}
+
+.browser-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.browser-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 44px;
+  flex: 0 0 44px;
+  padding: 0 8px;
+  box-sizing: border-box;
+  background: #15181d;
+  border-bottom: 1px solid #272c34;
+}
+
+.browser-nav {
+  display: flex;
+  gap: 2px;
+}
+
+.browser-nav button,
+.browser-new-tab,
+.browser-tab-close {
+  border: 0;
+  background: transparent;
+  color: #aeb7c4;
+  cursor: pointer;
+  border-radius: 4px;
+  font: inherit;
+}
+
+.browser-nav button {
+  width: 26px;
+  height: 26px;
+  font-size: 15px;
+}
+
+.browser-nav button:hover:not(:disabled),
+.browser-new-tab:hover,
+.browser-tab-close:hover {
+  background: #242a33;
+  color: #e5eaf1;
+}
+
+.browser-nav button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.browser-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.browser-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.browser-tab {
+  display: flex;
+  align-items: center;
+  max-width: 220px;
+  min-width: 90px;
+  height: 28px;
+  border-radius: 5px;
+  background: #1c2027;
+}
+
+.browser-tab-active {
+  background: #2b323d;
+}
+
+.browser-tab-title {
+  flex: 1;
+  min-width: 0;
+  padding: 0 6px 0 9px;
+  border: 0;
+  background: transparent;
+  color: #c2cad6;
+  text-align: left;
+  font: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.browser-tab-active .browser-tab-title {
+  color: #f1f5fa;
+}
+
+.browser-tab-close {
+  width: 20px;
+  height: 20px;
+  margin-right: 3px;
+  font-size: 14px;
+}
+
+.browser-new-tab {
+  width: 26px;
+  height: 26px;
+  font-size: 17px;
+}
+
+.browser-address {
+  flex: 1;
+  min-width: 120px;
+  height: 28px;
+  margin-left: 6px;
+  padding: 0 10px;
+  border: 1px solid #2c333d;
+  border-radius: 6px;
+  background: #0f1216;
+  color: #d8dee9;
+  font: inherit;
+  outline: none;
+}
+
+.browser-address:focus {
+  border-color: #4c7dd4;
+}
+
+.browser-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: #6f7b8c;
+}
+
+.browser-empty p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.browser-empty .browser-empty-hint {
+  font-size: 12px;
+  color: #596474;
+}

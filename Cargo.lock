@@ -724,8 +724,10 @@ name = "corral-app"
 version = "0.5.0"
 dependencies = [
  "base64 0.22.1",
+ "cairo-rs",
  "corral-core",
  "ignore",
+ "image",
  "notify",
  "notify-rust",
  "parking_lot",
@@ -744,6 +746,9 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ureq",
+ "url",
+ "uuid",
+ "webkit2gtk",
 ]
 
 [[package]]
@@ -778,6 +783,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tracing",
  "ureq",
+ "url",
  "uuid",
 ]
 

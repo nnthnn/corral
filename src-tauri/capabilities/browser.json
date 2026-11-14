@@ -1,0 +1,21 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "browser-chrome",
+  "description": "Corral's local browser chrome page: tab strip and address bar. Remote page webviews deliberately match no capability.",
+  "webviews": ["corral-browser-chrome-*"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
+  "permissions": [
+    "core:default",
+    "allow-browser-ui-ready",
+    "allow-browser-ui-bounds",
+    "allow-browser-tab-new",
+    "allow-browser-tab-focus",
+    "allow-browser-tab-close",
+    "allow-browser-navigate",
+    "allow-browser-go-back",
+    "allow-browser-go-forward",
+    "allow-browser-reload"
+  ]
+}

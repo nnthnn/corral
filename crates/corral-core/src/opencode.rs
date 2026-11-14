@@ -133,7 +133,48 @@ pub fn create_session(base_url: &str) -> Result<String> {
 pub fn create_session_v2(base_url: &str, password: &str, directory: &Path) -> Result<String> {
     let url = format!("{base_url}/api/session");
     let model = resolve_default_model(directory);
-    let body = match &model {
+    // `wait_until_ready` only proves the HTTP server accepts connections, and
+    // V2 starts answering `/session/status` with its web UI *before* the
+    // location service is ready. `POST /api/session` then answers
+    // `503 {"code":"service_starting"}` for a brief window. Retry that one
+    // status (and only that one) so a fast session start isn't a race.
+    let mut body: Option<Value> = None;
+    for attempt in 0..100 {
+        match http_agent()
+            .post(&url)
+            .header("Authorization", &basic_auth(password))
+            .send_json(body_value(&model, directory))
+        {
+            Ok(mut response) => {
+                body = Some(response.body_mut().read_json().map_err(|e| {
+                    Error::Other(format!("opencode: create_session_v2: bad response: {e}"))
+                })?);
+                break;
+            }
+            Err(ureq::Error::StatusCode(503)) if attempt < 99 => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => {
+                return Err(Error::Other(format!(
+                    "opencode: create_session_v2 failed: {e}"
+                )));
+            }
+        }
+    }
+    let body: Value = body.ok_or_else(|| {
+        Error::Other("opencode: create_session_v2 failed: server still starting after 10s".into())
+    })?;
+    body.pointer("/data/id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| Error::Other("opencode: create_session_v2 response missing data.id".into()))
+}
+
+/// The `POST /api/session` body: the session's location plus opencode's
+/// default model when one could be resolved. Rebuilt per retry (the request
+/// builder is consumed) instead of cloning the whole `Value`.
+fn body_value(model: &Option<ModelRef>, directory: &Path) -> Value {
+    match model {
         Some(model) => serde_json::json!({
             "location": { "directory": directory.to_string_lossy() },
             "model": model,
@@ -141,19 +182,7 @@ pub fn create_session_v2(base_url: &str, password: &str, directory: &Path) -> Re
         None => serde_json::json!({
             "location": { "directory": directory.to_string_lossy() },
         }),
-    };
-    let body: Value = http_agent()
-        .post(&url)
-        .header("Authorization", &basic_auth(password))
-        .send_json(body)
-        .map_err(|e| Error::Other(format!("opencode: create_session_v2 failed: {e}")))?
-        .body_mut()
-        .read_json()
-        .map_err(|e| Error::Other(format!("opencode: create_session_v2: bad response: {e}")))?;
-    body.pointer("/data/id")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| Error::Other("opencode: create_session_v2 response missing data.id".into()))
+    }
 }
 
 /// The model an opencode session is created with: a provider + model id (and
@@ -579,6 +608,156 @@ fn forget_tabs_in_file(tabs_path: &Path, directory: &Path) {
             tabs_path.display()
         ),
     }
+}
+
+/// A failed call to OpenCode's `experimental.browser` RPC (registered by the
+/// built-in browser plugin, one per server location). Kept separate from the
+/// generic [`Error`] because the host must distinguish a *retryable* startup
+/// race (`rpc.unavailable`, the plugin still loading) from a real rejection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BrowserRpcError {
+    /// `rpc.unavailable`: the browser plugin's RPC is not registered yet (or
+    /// has been unloaded). On a freshly started server this is expected for a
+    /// few seconds while the plugin supervisor activates; retry it.
+    Unavailable { message: String },
+    /// Any other structured RPC error, e.g. `unavailable` for a detached
+    /// connection or `rpc.invalid_input`.
+    Rejected { kind: String, message: String },
+    /// The HTTP request itself failed (server gone, connection reset, ...).
+    Transport(String),
+}
+
+impl std::fmt::Display for BrowserRpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable { message } => write!(f, "rpc.unavailable: {message}"),
+            Self::Rejected { kind, message } => write!(f, "{kind}: {message}"),
+            Self::Transport(message) => f.write_str(message),
+        }
+    }
+}
+
+/// Normal RPC calls: bounded response time so a wedged server can't hang the
+/// host thread. `http_status_as_error(false)` makes a structured error
+/// response readable, which the default `ureq` agent would turn into a bare
+/// status error.
+fn browser_rpc_agent() -> &'static ureq::Agent {
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        ureq::Agent::new_with_config(
+            ureq::Agent::config_builder()
+                .timeout_connect(Some(Duration::from_secs(5)))
+                .timeout_recv_response(Some(Duration::from_secs(30)))
+                .http_status_as_error(false)
+                .build(),
+        )
+    })
+}
+
+/// `attach` does not return until the attachment closes (that is the RPC's
+/// whole lifetime), so it must not have a response-read timeout.
+fn browser_attach_agent() -> &'static ureq::Agent {
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        ureq::Agent::new_with_config(
+            ureq::Agent::config_builder()
+                .timeout_connect(Some(Duration::from_secs(5)))
+                .timeout_recv_response(None)
+                .http_status_as_error(false)
+                .build(),
+        )
+    })
+}
+
+fn browser_rpc_post(
+    agent: &ureq::Agent,
+    base_url: &str,
+    password: &str,
+    method: &str,
+    directory: &Path,
+    input: Value,
+) -> std::result::Result<Value, BrowserRpcError> {
+    let mut url = url::Url::parse(&format!("{base_url}/api/rpc/experimental.browser/{method}"))
+        .map_err(|e| BrowserRpcError::Transport(format!("{method}: {e}")))?;
+    // The server resolves the plugin instance by location. Passing the
+    // session's directory explicitly keeps working when the session was
+    // created through a slug symlink (the server's default location is the
+    // canonical target, which is a different string).
+    url.query_pairs_mut()
+        .append_pair("location[directory]", &directory.to_string_lossy());
+    let mut response = agent
+        .post(url.as_str())
+        .header("Authorization", &basic_auth(password))
+        .send_json(serde_json::json!({ "input": input }))
+        .map_err(|e| BrowserRpcError::Transport(format!("{method}: {e}")))?;
+    let status = response.status();
+    // Error bodies are structured (`{"_tag":"RpcError","type":...,"message":...}`);
+    // a non-JSON body (e.g. an HTML error page) becomes a generic rejection.
+    let body: Value = response.body_mut().read_json().unwrap_or(Value::Null);
+    if status.is_success() {
+        return Ok(body.get("output").cloned().unwrap_or(Value::Null));
+    }
+    let kind = body
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("http_error")
+        .to_string();
+    let message = body
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("opencode browser RPC failed")
+        .to_string();
+    if kind == "rpc.unavailable" {
+        Err(BrowserRpcError::Unavailable { message })
+    } else {
+        Err(BrowserRpcError::Rejected { kind, message })
+    }
+}
+
+/// Call one method of OpenCode's `experimental.browser` RPC. `input` is the
+/// method's input object *without* the `{"input": ...}` wrapper; the return
+/// value is the method's `output` (`Null` when the server sends none).
+pub fn browser_rpc(
+    base_url: &str,
+    password: &str,
+    method: &str,
+    directory: &Path,
+    input: Value,
+) -> std::result::Result<Value, BrowserRpcError> {
+    browser_rpc_post(
+        browser_rpc_agent(),
+        base_url,
+        password,
+        method,
+        directory,
+        input,
+    )
+}
+
+/// Attach this process as the browser host for `session_id`. Blocks for the
+/// attachment's lifetime, returning `"closed"` or `"replaced"` once the
+/// server ends it. `connection_id` is the host's correlation handle; control
+/// events carry it back over the event stream.
+pub fn browser_attach(
+    base_url: &str,
+    password: &str,
+    session_id: &str,
+    connection_id: &str,
+    directory: &Path,
+) -> std::result::Result<String, BrowserRpcError> {
+    let output = browser_rpc_post(
+        browser_attach_agent(),
+        base_url,
+        password,
+        "attach",
+        directory,
+        serde_json::json!({
+            "sessionID": session_id,
+            "connectionID": connection_id,
+            "version": 4,
+        }),
+    )?;
+    Ok(output.as_str().unwrap_or("closed").to_string())
 }
 
 #[cfg(test)]

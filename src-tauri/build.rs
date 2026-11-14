@@ -54,6 +54,15 @@ fn main() {
             "resize_run",
             "resolve_run_command",
             "list_run_targets",
+            "browser_ui_ready",
+            "browser_ui_bounds",
+            "browser_tab_new",
+            "browser_tab_focus",
+            "browser_tab_close",
+            "browser_navigate",
+            "browser_go_back",
+            "browser_go_forward",
+            "browser_reload",
         ]),
     ))
     .expect("failed to run tauri-build");

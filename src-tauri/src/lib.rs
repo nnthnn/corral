@@ -1,6 +1,8 @@
 //! Tauri app bootstrap — the command surface itself lives in [`commands`],
 //! split by domain (worktrees, projects, settings, system, session).
 
+mod browser_host;
+mod browser_window;
 mod commands;
 mod conflict_poll;
 mod hook_listener;
@@ -158,8 +160,19 @@ pub fn run() {
             commands::run::resize_run,
             commands::run::resolve_run_command,
             commands::run::list_run_targets,
+            browser_host::browser_ui_ready,
+            browser_host::browser_ui_bounds,
+            browser_host::browser_tab_new,
+            browser_host::browser_tab_focus,
+            browser_host::browser_tab_close,
+            browser_host::browser_navigate,
+            browser_host::browser_go_back,
+            browser_host::browser_go_forward,
+            browser_host::browser_reload,
         ])
         .setup(move |app| {
+            app.manage(browser_host::BrowserHosts::default());
+
             #[cfg(dev)]
             {
                 WebviewWindowBuilder::new(
