@@ -68,6 +68,15 @@
     "allow-get-run-output",
     "allow-resize-run",
     "allow-resolve-run-command",
-    "allow-list-run-targets"
+    "allow-list-run-targets",
+    "allow-browser-ui-ready",
+    "allow-browser-ui-bounds",
+    "allow-browser-tab-new",
+    "allow-browser-tab-focus",
+    "allow-browser-tab-close",
+    "allow-browser-navigate",
+    "allow-browser-go-back",
+    "allow-browser-go-forward",
+    "allow-browser-reload"
   ]
 }
