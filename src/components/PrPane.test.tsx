@@ -38,10 +38,19 @@ const details: PrDetails = {
   review_decision: "REVIEW_REQUIRED",
   comments: [
     {
+      id: "https://x/c1",
       author: "github-actions",
       body: "CI note",
       created_at: "2026-07-15T00:00:00Z",
       url: "https://x/c1",
+      review_state: "",
+    },
+  ],
+  reviews: [
+    {
+      author: "alice",
+      state: "APPROVED",
+      submitted_at: "2026-07-15T01:00:00Z",
     },
   ],
 };
@@ -180,6 +189,114 @@ describe("PrPane", () => {
     expect(screen.getByText("CI note").tagName).toBe("P");
   });
 
+  it("renders a review with a body as a timeline comment, labeled with its review state", () => {
+    // Regression: `gh pr view --json comments` only returns issue comments, so
+    // an approving review with a body ("nice, much better") left the PR tab
+    // saying "No comments yet." Reviews are now folded into `comments`.
+    const reviewDetails: PrDetails = {
+      ...details,
+      comments: [
+        ...details.comments,
+        {
+          id: "review:PRR_1",
+          author: "jhsu",
+          body: "nice, much better",
+          created_at: "2026-07-16T00:00:00Z",
+          url: "",
+          review_state: "APPROVED",
+        },
+      ],
+    };
+    useStore.setState({
+      prDetailsByWtId: new Map([["corral/hulling", reviewDetails]]),
+    });
+    render(<PrPane wt={wt} />);
+    expect(screen.getAllByText("2 comments").length).toBeGreaterThan(0);
+    expect(screen.getByText("jhsu")).toBeInTheDocument();
+    expect(screen.getByText("nice, much better")).toBeInTheDocument();
+    // The header says what the reviewer did, not just "commented".
+    expect(screen.getByText(/approved these changes/)).toBeInTheDocument();
+  });
+
+  it("expands the Approvals segment to list each reviewer's latest state", () => {
+    useStore.setState({
+      prDetailsByWtId: new Map([
+        [
+          "corral/hulling",
+          {
+            ...details,
+            reviews: [
+              {
+                author: "alice",
+                state: "CHANGES_REQUESTED",
+                submitted_at: "2026-07-15T01:00:00Z",
+              },
+              {
+                author: "bob",
+                state: "APPROVED",
+                submitted_at: "2026-07-15T02:00:00Z",
+              },
+              {
+                // A later approval supersedes alice's earlier change request —
+                // one row per reviewer, like GitHub.
+                author: "alice",
+                state: "APPROVED",
+                submitted_at: "2026-07-15T03:00:00Z",
+              },
+            ],
+          },
+        ],
+      ]),
+    });
+    render(<PrPane wt={wt} />);
+    // Collapsed by default.
+    expect(screen.queryByText("alice")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Approvals" }));
+    expect(screen.getByText("alice")).toBeInTheDocument();
+    expect(screen.getByText("bob")).toBeInTheDocument();
+    // alice + bob, and no leftover "Changes requested" row for alice.
+    expect(screen.getAllByText("Approved")).toHaveLength(2);
+    expect(screen.queryByText("Changes requested")).not.toBeInTheDocument();
+  });
+
+  it("shows an empty Approvals panel with No reviews yet", () => {
+    useStore.setState({
+      prDetailsByWtId: new Map([
+        ["corral/hulling", { ...details, reviews: [] }],
+      ]),
+    });
+    render(<PrPane wt={wt} />);
+    fireEvent.click(screen.getByRole("button", { name: "Approvals" }));
+    expect(screen.getByText("No reviews yet.")).toBeInTheDocument();
+  });
+
+  it("shows the Approvals column when reviewers exist even without a required review", () => {
+    useStore.setState({
+      prDetailsByWtId: new Map([
+        [
+          "corral/hulling",
+          {
+            ...details,
+            review_decision: "",
+            reviews: [
+              {
+                author: "alice",
+                state: "APPROVED",
+                submitted_at: "2026-07-15T01:00:00Z",
+              },
+            ],
+          },
+        ],
+      ]),
+    });
+    render(<PrPane wt={wt} />);
+    expect(
+      screen.getByRole("button", { name: "Approvals" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("1 review")).toBeInTheDocument();
+  });
+
   it("calls addCommentsToChat for a single comment's Add to chat", () => {
     useStore.setState({
       prDetailsByWtId: new Map([["corral/hulling", details]]),
@@ -220,7 +337,7 @@ describe("PrPane", () => {
   it("shows All checks have passed when no review is required", () => {
     useStore.setState({
       prDetailsByWtId: new Map([
-        ["corral/hulling", { ...details, review_decision: "" }],
+        ["corral/hulling", { ...details, review_decision: "", reviews: [] }],
       ]),
       checksByWtId: new Map([["corral/hulling", [passCheck]]]),
     });
@@ -235,7 +352,7 @@ describe("PrPane", () => {
   it("shows Ready to merge when there are no checks or required reviews", () => {
     useStore.setState({
       prDetailsByWtId: new Map([
-        ["corral/hulling", { ...details, review_decision: "" }],
+        ["corral/hulling", { ...details, review_decision: "", reviews: [] }],
       ]),
     });
     render(<PrPane wt={wt} />);
@@ -248,7 +365,7 @@ describe("PrPane", () => {
   it("shows Checks failed in the summary card when a check fails", () => {
     useStore.setState({
       prDetailsByWtId: new Map([
-        ["corral/hulling", { ...details, review_decision: "" }],
+        ["corral/hulling", { ...details, review_decision: "", reviews: [] }],
       ]),
       checksByWtId: new Map([["corral/hulling", [failCheck]]]),
     });
@@ -263,10 +380,12 @@ describe("PrPane", () => {
       comments: [
         ...details.comments,
         {
+          id: "https://x/2",
           author: "alice",
           body: "second",
           created_at: "2026-07-16T00:00:00Z",
           url: "https://x/2",
+          review_state: "",
         },
       ],
     };

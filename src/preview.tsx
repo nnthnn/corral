@@ -398,9 +398,7 @@ const PR_PREVIEW_INFO: PrInfo = {
 const PR_PREVIEW_DETAILS: PrDetails = {
   title: "Add keyboard-driven worktree switching",
   author: "nnthnn",
-  // Most PRs have no required approvals — this is the common summary card.
-  // Set to "REVIEW_REQUIRED" to preview the Approval-required variant.
-  review_decision: "",
+  review_decision: "APPROVED",
   body: [
     "## Summary",
     "- Adds `Ctrl+1–9` worktree jumps and `Ctrl+[` / `Ctrl+]` prev/next.",
@@ -415,16 +413,35 @@ const PR_PREVIEW_DETAILS: PrDetails = {
   ].join("\n"),
   comments: [
     {
+      id: "https://github.com/nnthnn/corral/pull/128#issuecomment-1",
       author: "octocat",
       body: "This feels great. Could we also show the shortcut in the hover card?",
       created_at: "2026-11-12T03:24:00Z",
       url: "https://github.com/nnthnn/corral/pull/128#issuecomment-1",
+      review_state: "",
     },
     {
+      id: "https://github.com/nnthnn/corral/pull/128#issuecomment-2",
       author: "github-actions",
       body: "### Build & test\n\nAll checks passed on the latest commit.",
       created_at: "2026-11-12T04:10:00Z",
       url: "https://github.com/nnthnn/corral/pull/128#issuecomment-2",
+      review_state: "",
+    },
+  ],
+  // Oldest first, as `gh pr view --json reviews` reports them. Flip
+  // `review_decision` to "REVIEW_REQUIRED" to preview the approval-gated
+  // variant, or drop `reviews` to preview the no-reviewer column.
+  reviews: [
+    {
+      author: "github-actions",
+      state: "COMMENTED",
+      submitted_at: "2026-11-12T04:30:00Z",
+    },
+    {
+      author: "octocat",
+      state: "APPROVED",
+      submitted_at: "2026-11-12T05:00:00Z",
     },
   ],
 };
