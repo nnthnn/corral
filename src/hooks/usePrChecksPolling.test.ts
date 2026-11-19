@@ -93,6 +93,7 @@ describe("usePrChecksPolling", () => {
             author: "octocat",
             review_decision: "REVIEW_REQUIRED",
             comments: [],
+            reviews: [],
           },
         ],
       ]),

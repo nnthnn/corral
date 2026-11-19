@@ -135,10 +135,25 @@ export interface CheckRun {
 }
 
 export interface PrComment {
+  /** Stable list key: the issue comment's URL, or `review:<id>` for a review
+   * (`gh` exposes no per-review URL). */
+  id: string;
   author: string;
   body: string;
   created_at: string;
+  /** Link to the comment on GitHub. Empty for reviews. */
   url: string;
+  /** Empty for an ordinary issue comment; otherwise GitHub's review state
+   * (`APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`, `DISMISSED`) — reviews
+   * with a body appear in the same timeline on github.com. */
+  review_state: string;
+}
+
+export interface PrReview {
+  author: string;
+  /** `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`, or `DISMISSED`. */
+  state: string;
+  submitted_at: string;
 }
 
 export interface PrDetails {
@@ -150,6 +165,10 @@ export interface PrDetails {
    * review is required. */
   review_decision: string;
   comments: PrComment[];
+  /** Every submitted review, oldest first — the Approvals panel folds them
+   * down to each reviewer's latest state. Separate from `comments` because a
+   * review may have no body. */
+  reviews: PrReview[];
 }
 
 export type MergePrResult =

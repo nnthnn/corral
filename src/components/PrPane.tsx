@@ -25,7 +25,7 @@ import {
   markPrReady,
 } from "../lib/checks";
 import { useStore } from "../store";
-import type { CheckRun, PrComment, PrInfo, Worktree } from "../types";
+import type { CheckRun, PrComment, PrInfo, PrReview, Worktree } from "../types";
 import { relativeTime, wtId } from "../utils";
 import { Button } from "./Button";
 import { LassoSpinner } from "./LassoSpinner";
@@ -133,6 +133,57 @@ const CHECK_GROUPS: { label: string; buckets: CheckRun["bucket"][] }[] = [
   { label: "Skipped", buckets: ["skipping"] },
 ];
 
+/** Human label + tone for one review state, mirroring GitHub's review chips. */
+function reviewStatus(state: string): {
+  label: string;
+  tone: "success" | "danger" | "muted";
+} {
+  switch (state) {
+    case "APPROVED":
+      return { label: "Approved", tone: "success" };
+    case "CHANGES_REQUESTED":
+      return { label: "Changes requested", tone: "danger" };
+    case "DISMISSED":
+      return { label: "Dismissed", tone: "muted" };
+    default:
+      return { label: "Commented", tone: "muted" };
+  }
+}
+
+function ReviewRow({ review, prUrl }: { review: PrReview; prUrl?: string }) {
+  const status = reviewStatus(review.state);
+  return (
+    <div className="flex items-center gap-3 border-t border-border px-3 py-2.5 first:border-t-0 hover:bg-surface-2/60">
+      <Avatar name={review.author} />
+      <span className="min-w-0 flex-1 truncate text-base">{review.author}</span>
+      <span
+        className={clsx(
+          "text-sub",
+          status.tone === "success" && "text-success",
+          status.tone === "danger" && "text-danger",
+          status.tone === "muted" && "text-muted",
+        )}
+      >
+        {status.label}
+      </span>
+      <span className="shrink-0 text-sub text-muted">
+        {relativeTime(new Date(review.submitted_at).getTime() / 1000)}
+      </span>
+      {prUrl && (
+        <a
+          href={prUrl}
+          target="_blank"
+          rel="noreferrer"
+          title="View review on GitHub"
+          className="text-muted hover:text-text"
+        >
+          <ExternalLink size={16} />
+        </a>
+      )}
+    </div>
+  );
+}
+
 function CheckGroup({
   wt,
   label,
@@ -168,6 +219,22 @@ function CheckGroup({
   );
 }
 
+/** The verb GitHub puts in a timeline header. Reviews with a body show up in
+ * the same comment timeline on github.com, tagged with what the reviewer did
+ * — say so instead of calling an approval "commented". */
+function commentAction(reviewState: string): string {
+  switch (reviewState) {
+    case "APPROVED":
+      return "approved these changes";
+    case "CHANGES_REQUESTED":
+      return "requested changes";
+    case "DISMISSED":
+      return "dismissed a review";
+    default:
+      return "commented";
+  }
+}
+
 /** One GitHub-style timeline card: a header strip with author + timestamp and
  * a markdown body. Used for the PR description itself and every comment. */
 function TimelineCard({
@@ -176,6 +243,7 @@ function TimelineCard({
   body,
   wt,
   isDescription = false,
+  action = "commented",
   showHeader = true,
   scrollBody = false,
   onAddToChat,
@@ -185,6 +253,7 @@ function TimelineCard({
   body: string;
   wt: Worktree;
   isDescription?: boolean;
+  action?: string;
   showHeader?: boolean;
   scrollBody?: boolean;
   onAddToChat?: () => void;
@@ -197,7 +266,7 @@ function TimelineCard({
           <Avatar name={author} />
           <span className="text-base font-medium text-text">{author}</span>
           <span className="text-sub text-muted">
-            {isDescription ? "opened this pull request" : "commented"}
+            {isDescription ? "opened this pull request" : action}
             {time ? ` ${time}` : ""}
           </span>
           {onAddToChat && (
@@ -307,6 +376,7 @@ export function PrPane({
   const prInfo = useStore((s) => s.prInfoByWtId.get(id));
   const markingReady = useStore((s) => s.markingPrReadyIds.has(id));
   const [checksOpen, setChecksOpen] = useState(false);
+  const [approvalsOpen, setApprovalsOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState(false);
   const commentsRef = useRef<HTMLElement>(null);
@@ -339,6 +409,13 @@ export function PrPane({
   const total = checkList.length;
   const checksRunning = checksArePending(checkList);
   const comments = details?.comments ?? [];
+  // Reviews arrive oldest-first, so writing in order leaves each reviewer's
+  // latest state in the map — GitHub shows one row per reviewer, not one per
+  // review submission.
+  const reviewers = new Map<string, PrReview>();
+  for (const review of details?.reviews ?? []) {
+    reviewers.set(review.author, review);
+  }
   const reviewDecision = details?.review_decision ?? "";
   const approved = reviewDecision === "APPROVED";
   const changesRequested = reviewDecision === "CHANGES_REQUESTED";
@@ -405,8 +482,11 @@ export function PrPane({
       ? "Changes requested"
       : approvalRequired
         ? "Review required"
-        : "Not required";
-  const approvalPct = approved || changesRequested ? 100 : 0;
+        : reviewers.size > 0
+          ? `${reviewers.size} review${reviewers.size === 1 ? "" : "s"}`
+          : "Not required";
+  const approvalPct =
+    approved || changesRequested || reviewers.size > 0 ? 100 : 0;
   const approvalTone = approved
     ? "success"
     : changesRequested
@@ -414,8 +494,10 @@ export function PrPane({
       : "muted";
 
   // When GitHub requires no review, an empty "Approvals: Not required" column
-  // is just noise — show Checks + Comments instead.
-  const showApprovals = reviewDecision !== "";
+  // is just noise — show Checks + Comments instead. Reviews submitted without
+  // a required-review policy (e.g. an approving review on a repo that doesn't
+  // gate merges) still earn the column, since there's a reviewer to list.
+  const showApprovals = reviewDecision !== "" || reviewers.size > 0;
 
   const showSummary = !!details || !!prInfo || total > 0;
 
@@ -563,8 +645,14 @@ export function PrPane({
                   label="Approvals"
                   detail={approvalLabel}
                   ariaLabel="Approvals"
-                  icon={<ChevronRight size={16} />}
-                  onClick={() => prInfo && openUrl(prInfo.url)}
+                  icon={
+                    approvalsOpen ? (
+                      <ChevronDown size={16} />
+                    ) : (
+                      <ChevronRight size={16} />
+                    )
+                  }
+                  onClick={() => setApprovalsOpen((open) => !open)}
                 >
                   <Bar>
                     <BarFill pct={approvalPct} tone={approvalTone} />
@@ -589,6 +677,24 @@ export function PrPane({
                   <p className="px-4 py-6 text-center text-sub text-muted">
                     No checks reported yet.
                   </p>
+                )}
+              </div>
+            )}
+
+            {approvalsOpen && (
+              <div className="max-h-96 overflow-y-auto border-t border-border px-2 py-2">
+                {reviewers.size === 0 ? (
+                  <p className="px-4 py-6 text-center text-sub text-muted">
+                    No reviews yet.
+                  </p>
+                ) : (
+                  [...reviewers.values()].map((review) => (
+                    <ReviewRow
+                      key={review.author}
+                      review={review}
+                      prUrl={prInfo?.url}
+                    />
+                  ))
                 )}
               </div>
             )}
@@ -630,11 +736,12 @@ export function PrPane({
           ) : (
             comments.map((comment: PrComment) => (
               <TimelineCard
-                key={comment.url}
+                key={comment.id}
                 author={comment.author}
                 time={relativeTime(
                   new Date(comment.created_at).getTime() / 1000,
                 )}
+                action={commentAction(comment.review_state)}
                 body={comment.body}
                 wt={wt}
                 onAddToChat={() => addCommentsToChat([comment])}

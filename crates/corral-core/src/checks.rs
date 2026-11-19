@@ -96,10 +96,28 @@ pub fn checks_from_json(json: &str) -> Result<Vec<CheckRun>> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrComment {
+    /// Stable identity for the frontend's list key: the issue comment's URL,
+    /// or `review:<id>` for a review (`gh` exposes no per-review URL).
+    pub id: String,
     pub author: String,
     pub body: String,
     pub created_at: String,
+    /// Link to the comment on GitHub. Empty for reviews, which `gh` gives no
+    /// URL for.
     pub url: String,
+    /// Empty for an ordinary issue comment; otherwise GitHub's review state
+    /// (`APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`, `DISMISSED`) — reviews
+    /// with a body show up in the same timeline on github.com.
+    #[serde(default)]
+    pub review_state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrReview {
+    pub author: String,
+    /// `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`, or `DISMISSED`.
+    pub state: String,
+    pub submitted_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +131,11 @@ pub struct PrDetails {
     #[serde(default)]
     pub review_decision: String,
     pub comments: Vec<PrComment>,
+    /// Every submitted review, in submission order — the Approvals panel
+    /// folds them down to each reviewer's latest state. Kept separate from
+    /// `comments` because a review may have no body.
+    #[serde(default)]
+    pub reviews: Vec<PrReview>,
 }
 
 #[derive(Deserialize)]
@@ -130,6 +153,16 @@ struct GhComment {
 }
 
 #[derive(Deserialize)]
+struct GhReview {
+    id: String,
+    author: GhAuthor,
+    body: String,
+    #[serde(rename = "submittedAt")]
+    submitted_at: String,
+    state: String,
+}
+
+#[derive(Deserialize)]
 struct GhPrView {
     title: String,
     body: String,
@@ -137,27 +170,68 @@ struct GhPrView {
     #[serde(rename = "reviewDecision", default)]
     review_decision: String,
     comments: Vec<GhComment>,
+    #[serde(default)]
+    reviews: Vec<GhReview>,
 }
 
-/// Maps `gh pr view --json title,body,author,reviewDecision,comments`'s
-/// stdout.
+/// Maps `gh pr view --json
+/// title,body,author,reviewDecision,comments,reviews`'s stdout.
+///
+/// Issue comments and review bodies are folded into one chronological list,
+/// mirroring github.com's timeline: a review such as "nice, much better"
+/// (submitted with an approve) is a comment the user expects to see, but
+/// `gh`'s `comments` field only carries issue comments. Reviews with an empty
+/// body are skipped — they'd render as blank "No content." cards, and the
+/// summary card's Approvals column already reports the review decision.
 pub fn pr_details_from_json(json: &str) -> Result<PrDetails> {
     let raw: GhPrView = serde_json::from_str(json)?;
+    let mut reviews: Vec<PrReview> = raw
+        .reviews
+        .iter()
+        .map(|r| PrReview {
+            author: r.author.login.clone(),
+            state: r.state.clone(),
+            submitted_at: r.submitted_at.clone(),
+        })
+        .collect();
+    let mut comments: Vec<PrComment> = raw
+        .comments
+        .into_iter()
+        .map(|c| PrComment {
+            id: c.url.clone(),
+            author: c.author.login,
+            body: c.body,
+            created_at: c.created_at,
+            url: c.url,
+            review_state: String::new(),
+        })
+        .collect();
+    comments.extend(
+        raw.reviews
+            .into_iter()
+            .filter(|r| !r.body.trim().is_empty())
+            .map(|r| PrComment {
+                id: format!("review:{}", r.id),
+                author: r.author.login,
+                body: r.body,
+                created_at: r.submitted_at,
+                url: String::new(),
+                review_state: r.state,
+            }),
+    );
+    // Both timestamp fields are ISO 8601 UTC (`...Z`), so lexicographic order
+    // is chronological — GitHub's timeline shows the two kinds interleaved.
+    comments.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    // Likewise oldest-first, so the frontend can fold each reviewer down to
+    // their latest review by taking the last entry.
+    reviews.sort_by(|a, b| a.submitted_at.cmp(&b.submitted_at));
     Ok(PrDetails {
         title: raw.title,
         body: raw.body,
         author: raw.author.login,
         review_decision: raw.review_decision,
-        comments: raw
-            .comments
-            .into_iter()
-            .map(|c| PrComment {
-                author: c.author.login,
-                body: c.body,
-                created_at: c.created_at,
-                url: c.url,
-            })
-            .collect(),
+        comments,
+        reviews,
     })
 }
 
@@ -236,9 +310,10 @@ pub fn pr_checks(dir: &Path) -> Result<Vec<CheckRun>> {
     checks_from_json(&String::from_utf8(output.stdout)?)
 }
 
-/// The open PR's title, body, author, review decision, and issue comments —
-/// `gh pr view --json title,body,author,reviewDecision,comments`. `Ok(None)`
-/// means "no PR yet" (mirrors `pr_status`'s convention), so the frontend can
+/// The open PR's title, body, author, review decision, and timeline comments
+/// (issue comments plus review bodies) — `gh pr view --json
+/// title,body,author,reviewDecision,comments,reviews`. `Ok(None)` means "no
+/// PR yet" (mirrors `pr_status`'s convention), so the frontend can
 /// distinguish it from a real `gh` failure.
 pub fn pr_details(dir: &Path) -> Result<Option<PrDetails>> {
     let output = Command::new("gh")
@@ -246,7 +321,7 @@ pub fn pr_details(dir: &Path) -> Result<Option<PrDetails>> {
             "pr",
             "view",
             "--json",
-            "title,body,author,reviewDecision,comments",
+            "title,body,author,reviewDecision,comments,reviews",
         ])
         .current_dir(dir)
         .output()?;
@@ -414,8 +489,52 @@ mod tests {
         assert_eq!(details.author, "octocat");
         assert_eq!(details.review_decision, "REVIEW_REQUIRED");
         assert_eq!(details.comments.len(), 1);
+        assert_eq!(details.comments[0].id, "https://x/c1");
         assert_eq!(details.comments[0].author, "github-actions");
         assert_eq!(details.comments[0].body, "CI note");
+        assert_eq!(details.comments[0].url, "https://x/c1");
+        assert_eq!(details.comments[0].review_state, "");
+    }
+
+    #[test]
+    fn pr_details_from_json_includes_review_bodies_in_chronological_order() {
+        // `gh pr view --json comments` only returns issue comments — a review
+        // submitted with a body (what github.com shows as a timeline comment)
+        // lives under `reviews` instead. Regression: the PR tab said "No
+        // comments yet" for a PR whose only comment was an approving review.
+        let json = r#"{
+            "title":"t",
+            "body":"b",
+            "author":{"login":"octocat"},
+            "comments":[
+                {"author":{"login":"alice"},"body":"later issue comment","createdAt":"2026-11-18T20:00:00Z","url":"https://x/c2"},
+                {"author":{"login":"alice"},"body":"earlier issue comment","createdAt":"2026-11-18T18:00:00Z","url":"https://x/c1"}
+            ],
+            "reviews":[
+                {"id":"PRR_1","author":{"login":"jhsu"},"body":"nice, much better","submittedAt":"2026-11-18T19:24:44Z","state":"APPROVED"},
+                {"id":"PRR_2","author":{"login":"bob"},"body":"","submittedAt":"2026-11-18T21:00:00Z","state":"COMMENTED"}
+            ]
+        }"#;
+        let details = pr_details_from_json(json).unwrap();
+        // The bodyless review is dropped; the rest interleave by time.
+        assert_eq!(details.comments.len(), 3);
+        assert_eq!(details.comments[0].body, "earlier issue comment");
+        assert_eq!(details.comments[1].body, "nice, much better");
+        assert_eq!(details.comments[2].body, "later issue comment");
+        // Review entries get a synthetic key (no URL from `gh`) and keep their
+        // review state so the UI can say "approved these changes".
+        assert_eq!(details.comments[1].id, "review:PRR_1");
+        assert_eq!(details.comments[1].url, "");
+        assert_eq!(details.comments[1].review_state, "APPROVED");
+        assert_eq!(details.comments[1].author, "jhsu");
+        assert_eq!(details.comments[1].created_at, "2026-11-18T19:24:44Z");
+        // The Approvals panel keeps every review (even a bodyless one) so it
+        // can show who reviewed and in what state, oldest first.
+        assert_eq!(details.reviews.len(), 2);
+        assert_eq!(details.reviews[0].author, "jhsu");
+        assert_eq!(details.reviews[0].state, "APPROVED");
+        assert_eq!(details.reviews[1].author, "bob");
+        assert_eq!(details.reviews[1].state, "COMMENTED");
     }
 
     #[test]
@@ -423,6 +542,7 @@ mod tests {
         let json = r#"{"title":"t","body":"b","author":{"login":"a"},"comments":[]}"#;
         let details = pr_details_from_json(json).unwrap();
         assert!(details.comments.is_empty());
+        assert!(details.reviews.is_empty());
         // `reviewDecision` is absent when no review is required — defaults to
         // empty rather than failing the whole parse.
         assert_eq!(details.review_decision, "");

@@ -280,10 +280,12 @@ describe("addCommentsToChat", () => {
       activeTab: "pr",
     });
     const comment: PrComment = {
+      id: "https://x/c1",
       author: "github-actions",
       body: "CI note",
       created_at: "2026-07-15T00:00:00Z",
       url: "https://x/c1",
+      review_state: "",
     };
     addCommentsToChat([comment]);
     expect(pasteToActive).toHaveBeenCalledWith(
@@ -300,16 +302,20 @@ describe("addCommentsToChat", () => {
     useStore.setState({ sessionMgr: { pasteToActive } as never });
     const comments: PrComment[] = [
       {
+        id: "https://x/1",
         author: "alice",
         body: "first",
         created_at: "2026-07-15T00:00:00Z",
         url: "https://x/1",
+        review_state: "",
       },
       {
+        id: "https://x/2",
         author: "bob",
         body: "second",
         created_at: "2026-07-15T00:01:00Z",
         url: "https://x/2",
+        review_state: "",
       },
     ];
     addCommentsToChat(comments);
