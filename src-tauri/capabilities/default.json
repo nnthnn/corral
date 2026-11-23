@@ -21,6 +21,7 @@
     "allow-home-dir",
     "allow-memory-usage",
     "allow-list-monospace-fonts",
+    "allow-copy-diagnostics",
     "allow-list-projects",
     "allow-project-icon",
     "allow-add-project",

@@ -178,6 +178,7 @@ interface CommandMap {
   };
   home_dir: { args: undefined; result: string | null };
   memory_usage: { args: undefined; result: number | null };
+  copy_diagnostics: { args: undefined; result: string };
   save_pasted_image: { args: { bytes: number[] }; result: string };
   save_text_attachment: { args: { text: string }; result: string };
   open_in_zed: {

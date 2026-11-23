@@ -8,6 +8,7 @@ pub mod bin;
 pub mod caffeinate;
 pub mod checks;
 pub mod config;
+pub mod diagnostics;
 pub mod error;
 pub mod files;
 pub mod git;

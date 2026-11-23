@@ -116,6 +116,20 @@ enum Commands {
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
+    /// Print a read-only snapshot of the machine as corral sees it — resolved
+    /// agent/git/gh executables, desktop + WebKit versions, config/data
+    /// health, and a list of anything that looks wrong. Meant to be pasted
+    /// into a bug report: it never reads the network, never writes to disk,
+    /// and summarizes state as counts rather than listing project or
+    /// worktree names.
+    Doctor {
+        /// Machine-readable JSON instead of text.
+        #[arg(long, conflicts_with = "markdown")]
+        json: bool,
+        /// A Markdown code block, ready to paste into a GitHub issue.
+        #[arg(long)]
+        markdown: bool,
+    },
     /// Internal: invoked by Claude Code hooks (Stop / Notification /
     /// UserPromptSubmit) installed into a project's shared
     /// `.claude/settings.local.json` by the Tauri app. Reads the hook's
@@ -205,6 +219,7 @@ fn main() -> Result<()> {
         Commands::Config { action } => cmd_config(action),
         Commands::Project { action } => cmd_project(action),
         Commands::Awake { why, command } => awake::run(&why, &command),
+        Commands::Doctor { json, markdown } => cmd_doctor(json, markdown),
         Commands::NotifyHook { event } => {
             cmd_notify_hook(&event);
             Ok(())
@@ -343,6 +358,20 @@ fn cmd_rename(new_name: &str, feature: Option<&str>, project: Option<&str>) -> R
     let renamed = worktree::rename(&wt.project, &wt.feature, new_name)
         .with_context(|| format!("renaming worktree {}", label(&wt)))?;
     println!("renamed to {} [{}]", label(&renamed), renamed.branch);
+    Ok(())
+}
+
+fn cmd_doctor(json: bool, markdown: bool) -> Result<()> {
+    let report = corral_core::diagnostics::collect(VERSION, "corral");
+    if json {
+        // stdout only: `doctor`'s own tracing lines go to stderr, so the JSON
+        // stays pipeable into `jq`.
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else if markdown {
+        print!("{}", corral_core::diagnostics::render_markdown(&report));
+    } else {
+        print!("{}", corral_core::diagnostics::render_text(&report));
+    }
     Ok(())
 }
 

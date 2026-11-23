@@ -7,6 +7,7 @@ mod commands;
 mod conflict_poll;
 mod hook_listener;
 mod idle_timeout;
+mod logging;
 mod opencode_events;
 mod pr_poll;
 mod watch;
@@ -32,15 +33,10 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 /// anything else — including unknown/future desktop environments — defaults
 /// to real decorations rather than guessing wrong toward "hide everything."
 fn decorations_for_desktop(current_desktop: Option<&str>) -> bool {
-    const TILING_WMS: &[&str] = &[
-        "hyprland", "sway", "i3", "dwm", "bspwm", "awesome", "xmonad", "qtile", "river", "wayfire",
-    ];
-    match current_desktop {
-        Some(value) => !value
-            .split(':')
-            .any(|part| TILING_WMS.contains(&part.to_lowercase().as_str())),
-        None => true,
-    }
+    // The tiling-WM list lives in `corral_core::diagnostics` so `corral
+    // doctor` reports the same classification this function acts on.
+    // `is_tiling_desktop` already treats an unset desktop as "not tiling".
+    !corral_core::diagnostics::is_tiling_desktop(current_desktop)
 }
 
 #[cfg(target_os = "linux")]
@@ -71,14 +67,9 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     let shell_env = corral_core::shell_env::capture();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new("corral_app_lib=debug,corral_core=debug")
-            }),
-        )
-        .with_writer(std::io::stderr)
-        .init();
+    // stderr (dev terminal) plus a rolling file under the data dir — a
+    // bundled launch has no stderr anyone can read. See `logging`'s docs.
+    logging::init();
     tracing::info!("corral starting");
 
     #[cfg(target_os = "macos")]
@@ -150,6 +141,7 @@ pub fn run() {
             commands::system::home_dir,
             commands::system::memory_usage,
             commands::fonts::list_monospace_fonts,
+            commands::system::copy_diagnostics,
             commands::projects::list_projects,
             commands::projects::project_icon,
             commands::projects::add_project,

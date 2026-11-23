@@ -100,7 +100,19 @@ corral config get                         # print the resolved worktrees root
 corral config set <path>                  # override the worktrees root
 corral config reset                       # revert to the default (~/corral)
 corral awake -- <command>                 # run a command under a sleep/idle inhibitor
+corral doctor                             # paste-able machine/state snapshot for bug reports
 ```
+
+`corral doctor` prints a read-only snapshot of the machine as corral sees it:
+resolved agent/git/`gh` executables and versions, desktop + WebKit versions,
+config/data health, and a `warnings` list for anything that looks wrong (the
+active harness's binary missing, an unparseable `settings.json`, no sleep
+inhibitor, …). Use `--json` for machine-readable output or `--markdown` for a
+code block ready to paste into an issue. It never touches the network, never
+writes to disk, and reports state as counts with `~`-abbreviated paths — no
+project names, file contents, or prompts. The GUI's **Settings → Copy
+diagnostics** button produces the same report plus the tail of the app's log
+(`~/.local/share/corral/logs/`).
 
 `corral awake` is the portable sleep guard agents use for long-running
 background work (scans, test suites, dev servers, watchers). It holds

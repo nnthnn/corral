@@ -182,6 +182,43 @@ pub fn memory_usage() -> Option<u64> {
     corral_core::process::total_rss_bytes()
 }
 
+/// A Markdown "corral diagnostics" block for a bug report: the same snapshot
+/// `corral doctor` prints, plus the tail of the app's own log file (which a
+/// bundled launch would otherwise never let anyone see). The frontend copies
+/// the returned string straight to the clipboard — nothing here reads the
+/// network or writes to disk.
+///
+/// Synchronous probing (`git --version`, `gh auth status`, …) takes a moment,
+/// so Tauri runs this off the main thread like any other command.
+#[tauri::command]
+pub fn copy_diagnostics(app: tauri::AppHandle) -> String {
+    let version = format!(
+        "{} ({})",
+        app.package_info().version,
+        env!("CORRAL_GIT_SHA")
+    );
+    let report = corral_core::diagnostics::collect(&version, "corral-app");
+    let mut out = corral_core::diagnostics::render_markdown(&report);
+    out.push_str(&format!(
+        "\n### recent log tail\n\n```\n{}\n```\n",
+        app_log_tail()
+    ));
+    out
+}
+
+/// The last lines of this process's rolling log, with a clear placeholder
+/// when no log file could be written (stderr-only fallback).
+fn app_log_tail() -> String {
+    match crate::logging::tail(LOG_TAIL_LINES) {
+        Some(text) if !text.is_empty() => text,
+        _ => "(no log file yet — logs may be going to stderr only)".to_string(),
+    }
+}
+
+/// How much of the log the diagnostics blob carries. Enough for several
+/// startup + failure cycles without making the paste unwieldy.
+const LOG_TAIL_LINES: usize = 400;
+
 #[tauri::command]
 pub fn open_in_zed(path: String, editor_command: String) -> Result<(), String> {
     std::process::Command::new(&editor_command)

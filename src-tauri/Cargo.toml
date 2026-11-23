@@ -41,6 +41,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 fontdb = "0.24"
+tracing-appender = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.27.0"

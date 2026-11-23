@@ -31,6 +31,7 @@ anyhow = "1"
 rand = "0.8"
 uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
+tracing-appender = "0.2"
 base64 = "0.22"
 
 # https://github.com/nnthnn/tauri-patched (fork of tauri-v2.11.4, branch
