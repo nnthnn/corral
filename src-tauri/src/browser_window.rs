@@ -960,6 +960,7 @@ fn eval_json(webview: &Webview, script: String, timeout: Duration) -> Result<Val
         .map_err(|e| js_error_str(format!("browser agent returned invalid JSON: {e}")))
 }
 
+#[cfg(target_os = "linux")]
 fn snapshot_png(webview: &Webview, full_page: bool) -> Result<Vec<u8>, BrowserError> {
     use webkit2gtk::{SnapshotOptions, SnapshotRegion, WebViewExt};
     let (tx, rx) = mpsc::channel::<Option<Vec<u8>>>();
@@ -998,6 +999,16 @@ fn snapshot_png(webview: &Webview, full_page: bool) -> Result<Vec<u8>, BrowserEr
             )
         })?
         .ok_or_else(|| js_error_str("screenshot failed"))
+}
+
+/// Screenshots go through webkit2gtk's snapshot API, which is Linux-only.
+/// macOS (WKWebView) and Windows (WebView2) would need platform-specific
+/// code; report them as unsupported rather than failing to compile.
+#[cfg(not(target_os = "linux"))]
+fn snapshot_png(_webview: &Webview, _full_page: bool) -> Result<Vec<u8>, BrowserError> {
+    Err(js_error_str(
+        "browser screenshots are not supported on this platform yet",
+    ))
 }
 
 fn crop_png(

@@ -49,6 +49,64 @@ fn should_decorate() -> bool {
     true
 }
 
+/// Port the bundled Linux build serves the frontend on — `None` in dev builds
+/// and on every other platform, where Tauri's default custom-protocol content
+/// serving works (see the comment in [`run`]).
+///
+/// `cfg!(dev)` (rather than a `#[cfg(dev)]` attribute) keeps `portpicker`
+/// referenced on *every* Linux build, dev included, so Cargo's
+/// unused-dependency lint sees it as used. The dead branch is optimized away.
+#[cfg(target_os = "linux")]
+fn localhost_port() -> Option<u16> {
+    if cfg!(dev) {
+        return None;
+    }
+    match portpicker::pick_unused_port() {
+        Some(port) => Some(port),
+        None => {
+            // A bundled build has no attached terminal, so a panic message
+            // here would never be seen — log it properly and exit instead.
+            tracing::error!("no unused localhost port available; corral cannot start");
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn localhost_port() -> Option<u16> {
+    None
+}
+
+/// Attach the localhost content server when `port` is set.
+///
+/// `tauri_plugin_localhost` defaults to binding host "localhost", which on
+/// this system resolves/binds to [::1] (IPv6) only — but the webview's own
+/// "localhost" resolution can try 127.0.0.1 first, hitting nothing and failing
+/// with "Connection refused". Bind and navigate to the same explicit IPv4
+/// loopback address so they can't disagree.
+#[cfg(target_os = "linux")]
+fn with_localhost_plugin<R: tauri::Runtime>(
+    builder: tauri::Builder<R>,
+    port: Option<u16>,
+) -> tauri::Builder<R> {
+    match port {
+        Some(port) => builder.plugin(
+            tauri_plugin_localhost::Builder::new(port)
+                .host("127.0.0.1")
+                .build(),
+        ),
+        None => builder,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn with_localhost_plugin<R: tauri::Runtime>(
+    builder: tauri::Builder<R>,
+    _port: Option<u16>,
+) -> tauri::Builder<R> {
+    builder
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // A macOS app launched from Finder/Dock/`open` inherits launchd's minimal
@@ -100,30 +158,8 @@ pub fn run() {
     // `WebviewUrl::App` path (see the `url` selection in `setup` below).
     // Separately, the ipc:// command-dispatch channel needed its own fix —
     // see the `tauri` patch in the workspace Cargo.toml.
-    #[cfg(all(not(dev), target_os = "linux"))]
-    let port = match portpicker::pick_unused_port() {
-        Some(port) => port,
-        None => {
-            // A bundled build has no attached terminal, so a panic message
-            // here would never be seen — log it properly and exit instead.
-            tracing::error!("no unused localhost port available; corral cannot start");
-            std::process::exit(1);
-        }
-    };
-
-    // tauri_plugin_localhost defaults to binding host "localhost", which on
-    // this system resolves/binds to [::1] (IPv6) only — but the webview's
-    // own "localhost" resolution can try 127.0.0.1 first, hitting nothing
-    // and failing with "Connection refused". Bind and navigate to the same
-    // explicit IPv4 loopback address so they can't disagree.
-    #[cfg(all(not(dev), target_os = "linux"))]
-    let builder = tauri::Builder::default().plugin(
-        tauri_plugin_localhost::Builder::new(port)
-            .host("127.0.0.1")
-            .build(),
-    );
-    #[cfg(not(all(not(dev), target_os = "linux")))]
-    let builder = tauri::Builder::default();
+    let localhost_port = localhost_port();
+    let builder = with_localhost_plugin(tauri::Builder::default(), localhost_port);
 
     builder
         .plugin(tauri_plugin_opener::init())
@@ -212,12 +248,12 @@ pub fn run() {
             // `remote.urls` wildcard, so no runtime capability is needed).
             // Dev builds and non-Linux platforms use the normal
             // custom-protocol asset serving.
-            #[cfg(all(not(dev), target_os = "linux"))]
-            let url = tauri::Url::parse(&format!("http://127.0.0.1:{port}"))
-                .map(WebviewUrl::External)
-                .expect("just-formatted loopback URL");
-            #[cfg(not(all(not(dev), target_os = "linux")))]
-            let url = WebviewUrl::App(std::path::PathBuf::from("/"));
+            let url = match localhost_port {
+                Some(port) => tauri::Url::parse(&format!("http://127.0.0.1:{port}"))
+                    .map(WebviewUrl::External)
+                    .expect("just-formatted loopback URL"),
+                None => WebviewUrl::App(std::path::PathBuf::from("/")),
+            };
 
             WebviewWindowBuilder::new(app, "main", url)
                 .title("Corral")
