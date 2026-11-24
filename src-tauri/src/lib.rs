@@ -111,6 +111,7 @@ pub fn run() {
             commands::system::send_notification,
             commands::system::home_dir,
             commands::system::memory_usage,
+            commands::fonts::list_monospace_fonts,
             commands::projects::list_projects,
             commands::projects::project_icon,
             commands::projects::add_project,

@@ -6,6 +6,84 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { type ITerminalOptions, Terminal } from "@xterm/xterm";
 import { showError } from "./toasts";
 
+/** xterm.js's font stack when the user hasn't picked a family in settings —
+ * Linux-safe generic monospace first, with the usual macOS/macOS-ish names as
+ * hints. */
+export const DEFAULT_TERMINAL_FONT =
+  'ui-monospace, "SF Mono", Menlo, monospace';
+
+/** CSS generic font keywords — xterm hands `fontFamily` straight to CSS, so a
+ * stack already ending in one of these needs no help. */
+const GENERIC_FAMILIES = new Set([
+  "monospace",
+  "ui-monospace",
+  "sans-serif",
+  "ui-sans-serif",
+  "serif",
+  "ui-serif",
+  "system-ui",
+  "cursive",
+  "fantasy",
+  "math",
+  "emoji",
+  "fangsong",
+  "ui-rounded",
+]);
+
+/** Whether `name` is a CSS generic font keyword rather than a concrete family
+ * (see [`GENERIC_FAMILIES`]). Used both when resolving a stack's fallback and
+ * when checking a configured family against the installed-font list. */
+export function isGenericFontFamily(name: string): boolean {
+  return GENERIC_FAMILIES.has(name.trim().toLowerCase());
+}
+
+/** Resolve the `terminal_font_family` setting to what xterm should be handed:
+ * blank (the default) means [`DEFAULT_TERMINAL_FONT`]. A stack that doesn't
+ * already end in a generic family gets [`DEFAULT_TERMINAL_FONT`] appended,
+ * because a single *unavailable* family (e.g. a typo, or a datalist
+ * suggestion that isn't installed) otherwise makes WebKit fall back to its
+ * default **proportional** font — which breaks xterm's fixed cell grid rather
+ * than just looking different. The full built-in stack (not just `monospace`)
+ * keeps that degradation identical to the blank setting, e.g. landing on
+ * `SF Mono` on macOS before reaching the generic. */
+export function resolveTerminalFontFamily(family: string): string {
+  const trimmed = family.trim();
+  if (!trimmed) return DEFAULT_TERMINAL_FONT;
+  const last = trimmed
+    .split(",")
+    .pop()
+    ?.trim()
+    .replace(/^["']|["']$/g, "")
+    .toLowerCase();
+  if (last && GENERIC_FAMILIES.has(last)) return trimmed;
+  return `${trimmed}, ${DEFAULT_TERMINAL_FONT}`;
+}
+
+/** Apply a font setting change to an already-open terminal. Returns `true`
+ * when the options actually changed, `false` when the terminal already had
+ * them (e.g. it was just created with the current settings).
+ *
+ * xterm itself takes care of the hard parts on a `fontFamily`/`fontSize`
+ * option change: `CharSizeService` re-measures the cell synchronously, and
+ * the render service clears and fully repaints (rebuilt WebGL texture atlas
+ * included), so no `refresh()`/`clearTextureAtlas()` call is needed here.
+ * What xterm *can't* do is re-fit to the container or tell the PTY the new
+ * rows/cols — that stays with each caller, since agent terminals and the
+ * Run/Setup log panels resize through different commands. */
+export function applyTerminalFont(
+  term: Terminal,
+  family: string,
+  size: number,
+): boolean {
+  const applied = resolveTerminalFontFamily(family);
+  if (term.options.fontFamily === applied && term.options.fontSize === size) {
+    return false;
+  }
+  term.options.fontFamily = applied;
+  term.options.fontSize = size;
+  return true;
+}
+
 /** Every `xterm.js` instance in this app (the interactive agent terminal in
  * `session.ts`, and the read-only log viewers `ProvisionPanel`/`RunPanel`/
  * `RunPanel`) needs the same two non-obvious options, or it either

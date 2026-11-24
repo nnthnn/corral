@@ -142,6 +142,10 @@ pub async fn create_worktree(
     };
     let project_settings = corral_core::project_settings::get(&project).str_err()?;
     let setup_command = project_settings.setup_command.trim().to_string();
+    // Only auto-start when the project hasn't opted out: the command stays
+    // configured either way, and the Setup tab's Re-run button can still run
+    // it on demand (see `rerun_provision`).
+    let run_setup = project_settings.auto_setup && !setup_command.is_empty();
     let key = corral_core::agent_session::key(&project, &feature);
 
     let create_project = project.clone();
@@ -153,7 +157,7 @@ pub async fn create_worktree(
     .map_err(|e| e.to_string())?
     .str_err()?;
 
-    if !setup_command.is_empty() {
+    if run_setup {
         crate::commands::provision::start(app, &provision_registry, key, &wt.path, setup_command);
     }
     Ok(wt)

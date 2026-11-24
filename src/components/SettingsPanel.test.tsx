@@ -7,6 +7,18 @@ import { SettingsPanel } from "./SettingsPanel";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
+/** Dispatch mocked invokes by command name. The settings form calls
+ * `list_monospace_fonts` on mount, so order-based `mockResolvedValueOnce`
+ * chains would hand a test's save-specific value to that call instead. */
+function mockInvoke(
+  handlers: Partial<Record<string, () => Promise<unknown>>>,
+): void {
+  vi.mocked(invoke).mockImplementation(((cmd: string) => {
+    const handler = handlers[cmd];
+    return handler ? handler() : Promise.resolve(undefined);
+  }) as typeof invoke);
+}
+
 beforeEach(() => {
   useStore.setState(useStore.getInitialState());
   vi.mocked(invoke).mockReset();
@@ -122,7 +134,7 @@ describe("SettingsPanel", () => {
       settingsOpen: true,
       sessionMgr: { setFontSize, setFontFamily } as never,
     });
-    vi.mocked(invoke).mockResolvedValueOnce(undefined);
+    mockInvoke({ save_settings: async () => undefined });
     render(<SettingsPanel />);
     fireEvent.change(
       screen.getByDisplayValue(
@@ -140,6 +152,78 @@ describe("SettingsPanel", () => {
     expect(useStore.getState().settingsOpen).toBe(true);
   });
 
+  it("offers the system's installed monospaced fonts as suggestions", async () => {
+    useStore.setState({ settingsOpen: true });
+    mockInvoke({
+      list_monospace_fonts: async () => [
+        "CaskaydiaCove Nerd Font Mono",
+        "JetBrains Mono",
+      ],
+    });
+    render(<SettingsPanel />);
+
+    const datalist = document.getElementById("terminal-font-family-list");
+    expect(datalist).not.toBeNull();
+    await vi.waitFor(() =>
+      expect(
+        [...(datalist?.querySelectorAll("option") ?? [])].map((o) => o.value),
+      ).toEqual([
+        "CaskaydiaCove Nerd Font Mono",
+        "JetBrains Mono",
+        // Always appended so the generic keyword is pickable even when the
+        // backend enumeration returns a full list.
+        "monospace",
+      ]),
+    );
+  });
+
+  it("warns when the configured font isn't installed on this machine", async () => {
+    useStore.setState((s) => ({
+      settingsOpen: true,
+      settings: { ...s.settings, terminal_font_family: "Nonexistent Mono" },
+    }));
+    mockInvoke({
+      list_monospace_fonts: async () => ["Hack", "JetBrains Mono"],
+    });
+    render(<SettingsPanel />);
+
+    expect(
+      await screen.findByText(/“Nonexistent Mono” isn't among/),
+    ).toBeInTheDocument();
+  });
+
+  it("doesn't warn about an installed font", async () => {
+    useStore.setState((s) => ({
+      settingsOpen: true,
+      settings: { ...s.settings, terminal_font_family: "Hack" },
+    }));
+    mockInvoke({ list_monospace_fonts: async () => ["Hack"] });
+    render(<SettingsPanel />);
+
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("list_monospace_fonts", undefined),
+    );
+    expect(screen.queryByText(/isn't among/)).not.toBeInTheDocument();
+  });
+
+  it("doesn't claim a font is missing when the scan itself failed", async () => {
+    useStore.setState((s) => ({
+      settingsOpen: true,
+      settings: { ...s.settings, terminal_font_family: "Nonexistent Mono" },
+    }));
+    mockInvoke({
+      list_monospace_fonts: async () => {
+        throw new Error("not allowed");
+      },
+    });
+    render(<SettingsPanel />);
+
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("list_monospace_fonts", undefined),
+    );
+    expect(screen.queryByText(/isn't among/)).not.toBeInTheDocument();
+  });
+
   it("closes via the back button", () => {
     useStore.setState({ settingsOpen: true });
     render(<SettingsPanel />);
@@ -155,7 +239,11 @@ describe("SettingsPanel", () => {
 
   it("shows an error on save failure", async () => {
     useStore.setState({ settingsOpen: true });
-    vi.mocked(invoke).mockRejectedValueOnce(new Error("disk full"));
+    mockInvoke({
+      save_settings: async () => {
+        throw new Error("disk full");
+      },
+    });
     render(<SettingsPanel />);
     fireEvent.click(screen.getByText("Save"));
     await screen.findByText("Error: disk full");
@@ -164,7 +252,7 @@ describe("SettingsPanel", () => {
   it("shows a saving/saved sequence on the Save button, then reverts", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     useStore.setState({ settingsOpen: true });
-    vi.mocked(invoke).mockResolvedValueOnce(undefined);
+    mockInvoke({ save_settings: async () => undefined });
     render(<SettingsPanel />);
 
     fireEvent.click(screen.getByRole("button", { name: /save/i }));
@@ -182,7 +270,11 @@ describe("SettingsPanel", () => {
 
   it("marks the Save button with an error state on save failure", async () => {
     useStore.setState({ settingsOpen: true });
-    vi.mocked(invoke).mockRejectedValueOnce(new Error("disk full"));
+    mockInvoke({
+      save_settings: async () => {
+        throw new Error("disk full");
+      },
+    });
     render(<SettingsPanel />);
 
     fireEvent.click(screen.getByRole("button", { name: /save/i }));

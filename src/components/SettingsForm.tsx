@@ -1,6 +1,12 @@
 import clsx from "clsx";
 import { ArrowLeft, Check, Loader2, Volume2 } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
+import {
+  FALLBACK_MONOSPACE_FONTS,
+  firstUninstalledFamily,
+  type MonospaceFonts,
+  monospaceFonts,
+} from "../lib/fonts";
 import { playSoundChoice, SOUND_OPTIONS } from "../lib/notifications";
 import { cancelScheduledSettingsSave, saveSettings } from "../lib/settings";
 import { useStore } from "../store";
@@ -18,6 +24,13 @@ export function SettingsForm() {
   );
   const [fontSize, setFontSize] = useState(String(initial.terminal_font_size));
   const [fontFamily, setFontFamily] = useState(initial.terminal_font_family);
+  // Installed monospaced families, fetched once per mount (the backend caches
+  // the actual scan). Starts as the fallback list so the picker is usable
+  // immediately and in tests.
+  const [terminalFonts, setTerminalFonts] = useState<MonospaceFonts>({
+    families: FALLBACK_MONOSPACE_FONTS,
+    enumerated: false,
+  });
   const [diffFontSize, setDiffFontSize] = useState(
     String(initial.diff_font_size),
   );
@@ -68,6 +81,23 @@ export function SettingsForm() {
   );
   const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
+
+  useEffect(() => {
+    let cancelled = false;
+    monospaceFonts().then((fonts) => {
+      if (!cancelled) setTerminalFonts(fonts);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Only warn when the list really came from this machine's scan — with the
+  // fallback list we have no idea what's installed, so claiming anything is
+  // missing would be wrong.
+  const missingFont = terminalFonts.enumerated
+    ? firstUninstalledFamily(fontFamily, terminalFonts.families)
+    : null;
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -541,14 +571,23 @@ export function SettingsForm() {
                 onChange={(e) => setFontFamily(e.target.value)}
               />
               <datalist id="terminal-font-family-list">
-                <option value="JetBrains Mono" />
-                <option value="Fira Code" />
-                <option value="monospace" />
+                {terminalFonts.families.map((family) => (
+                  <option key={family} value={family} />
+                ))}
               </datalist>
             </label>
             <p className="hint">
-              Blank = built-in monospace. Unavailable fonts fall back silently.
+              Blank = built-in monospace. Suggestions are the monospaced fonts
+              installed on this machine — you can also type any family name.
+              Unavailable fonts fall back to monospace silently.
             </p>
+            {missingFont && (
+              <p className="warn">
+                “{missingFont}” isn't among this machine's installed monospaced
+                fonts — the terminal will fall back to its built-in monospace.
+                You can still keep it here if the font is installed elsewhere.
+              </p>
+            )}
           </div>
         </div>
         <label>

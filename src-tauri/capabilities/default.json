@@ -20,6 +20,7 @@
     "allow-send-notification",
     "allow-home-dir",
     "allow-memory-usage",
+    "allow-list-monospace-fonts",
     "allow-list-projects",
     "allow-project-icon",
     "allow-add-project",

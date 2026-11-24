@@ -11,7 +11,10 @@ import type { Terminal } from "@xterm/xterm";
 import { decodeBase64 } from "./lib/base64";
 import { detectOpencode2Hint } from "./lib/opencode2-hint";
 import { invoke } from "./lib/tauri";
-import { createLinkedTerminal } from "./lib/terminal";
+import {
+  createLinkedTerminal,
+  resolveTerminalFontFamily,
+} from "./lib/terminal";
 import { showError } from "./lib/toasts";
 import { useStore } from "./store";
 import "@xterm/xterm/css/xterm.css";
@@ -104,8 +107,6 @@ export const THEME = {
   selectionBackground: "rgba(237, 232, 224, 0.16)",
 };
 
-const FONT = 'ui-monospace, "SF Mono", Menlo, monospace';
-
 const DEFAULT_FONT_SIZE = 13;
 const MIN_FONT_SIZE = 8;
 const MAX_FONT_SIZE = 32;
@@ -188,7 +189,8 @@ export class SessionManager {
     /** Called whenever the font size changes (e.g. Ctrl/Cmd +/-/0), so the
      * caller can persist it — this class no longer owns persistence itself. */
     onFontSizeChange?: (size: number) => void;
-    /** Initial font family; empty/undefined falls back to `FONT`. */
+    /** Initial font family; empty/undefined falls back to the built-in
+     * monospace stack (see `resolveTerminalFontFamily`). */
     fontFamily?: string;
     /** Called whenever the font family changes, with the raw (possibly
      * empty) setting value — so the caller can persist it verbatim. */
@@ -210,7 +212,7 @@ export class SessionManager {
       Math.max(MIN_FONT_SIZE, opts.fontSize || DEFAULT_FONT_SIZE),
     );
     this.onFontSizeChange = opts.onFontSizeChange;
-    this.fontFamily = opts.fontFamily?.trim() || FONT;
+    this.fontFamily = resolveTerminalFontFamily(opts.fontFamily ?? "");
     this.onFontFamilyChange = opts.onFontFamilyChange;
     this.onOutput = opts.onOutput;
     this.onExit = opts.onExit;
@@ -619,7 +621,7 @@ export class SessionManager {
    * page). An empty string resets to the built-in monospace fallback. */
   setFontFamily(family: string) {
     const trimmed = family.trim();
-    const applied = trimmed || FONT;
+    const applied = resolveTerminalFontFamily(trimmed);
     if (applied === this.fontFamily) return;
     this.fontFamily = applied;
     this.onFontFamilyChange?.(trimmed);

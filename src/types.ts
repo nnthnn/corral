@@ -229,6 +229,9 @@ export interface Settings {
 export interface ProjectSettings {
   copy_globs: string[];
   setup_command: string;
+  /** Whether `setup_command` starts automatically when a worktree is created
+   * — the Setup tab can still run it on demand with Re-run. */
+  auto_setup: boolean;
   run_command: string;
   project_prompt: string;
   /** Per-project environment variables injected into every agent session,

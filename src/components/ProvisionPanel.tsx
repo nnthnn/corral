@@ -5,7 +5,12 @@ import { RotateCw, Square } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { drainOutput } from "../lib/output-buffer";
 import { invoke } from "../lib/tauri";
-import { attachCopyOnCtrlC, createLinkedTerminal } from "../lib/terminal";
+import {
+  applyTerminalFont,
+  attachCopyOnCtrlC,
+  createLinkedTerminal,
+  resolveTerminalFontFamily,
+} from "../lib/terminal";
 import { showError } from "../lib/toasts";
 import { THEME } from "../session";
 import { useStore } from "../store";
@@ -28,6 +33,8 @@ import { Button } from "./Button";
 export function ProvisionPanel({ wt }: { wt: Worktree }) {
   const id = wtId(wt);
   const state = useStore((s) => s.provisioning.get(id));
+  const fontFamily = useStore((s) => s.settings.terminal_font_family);
+  const fontSize = useStore((s) => s.settings.terminal_font_size);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<{
     term: Terminal;
@@ -70,6 +77,9 @@ export function ProvisionPanel({ wt }: { wt: Worktree }) {
     if (!containerRef.current) return;
     if (!termRef.current) {
       const { term, fit } = createLinkedTerminal({
+        fontFamily: resolveTerminalFontFamily(
+          useStore.getState().settings.terminal_font_family,
+        ),
         fontSize: useStore.getState().settings.terminal_font_size,
         cursorBlink: false,
         disableStdin: true,
@@ -131,6 +141,24 @@ export function ProvisionPanel({ wt }: { wt: Worktree }) {
       termRef.current = null;
     };
   }, [id]);
+
+  // Pick up terminal font setting changes while this tab is open — see the
+  // matching effect in `RunPanel` for why the ResizeObserver above can't
+  // cover this (a font change alters the cell grid without changing the
+  // container's box).
+  useEffect(() => {
+    const entry = termRef.current;
+    const el = containerRef.current;
+    if (!entry || !el) return;
+    if (!applyTerminalFont(entry.term, fontFamily, fontSize)) return;
+    if (el.clientWidth === 0 || el.clientHeight === 0) return;
+    entry.fit.fit();
+    invoke("resize_provision", {
+      key: id,
+      rows: entry.term.rows,
+      cols: entry.term.cols,
+    }).catch(() => {});
+  }, [id, fontFamily, fontSize]);
 
   const title = setupTitle(hasCommand, state);
 

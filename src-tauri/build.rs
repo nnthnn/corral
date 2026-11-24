@@ -5,6 +5,7 @@ fn main() {
             "send_notification",
             "home_dir",
             "memory_usage",
+            "list_monospace_fonts",
             "list_projects",
             "project_icon",
             "add_project",
