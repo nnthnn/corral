@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "corral — desktop UI for parallel Claude Code worktree sessions"
 
 [lib]
@@ -24,10 +25,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 portable-pty = "0.9.0"
 tauri-plugin-notification = "2.4.0"
-tauri-plugin-localhost = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
-portpicker = "0.1"
 notify = "8"
 notify-rust = "4"
 ignore = "0.4"
@@ -35,12 +34,26 @@ parking_lot = "0.12"
 ureq = { version = "3", features = ["json"] }
 uuid = { workspace = true }
 url = "2"
-webkit2gtk = "2"
-cairo-rs = { version = "0.18", features = ["png"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 fontdb = "0.24"
+tracing-appender = { workspace = true }
+
+# Only used by the bundled-Linux content-serving workaround (see `lib.rs`).
+# Target-gated so macOS/Windows don't compile two unused crates — and so
+# Cargo's unused-dependency lint doesn't flag them there.
+[target.'cfg(target_os = "linux")'.dependencies]
+portpicker = "0.1"
+tauri-plugin-localhost = "2"
+# webkit2gtk/cairo are only used by `browser_window.rs::snapshot_png` (the
+# WebKit snapshot -> PNG path). They must stay target-gated: webkit2gtk-sys
+# pulls in the whole GTK stack (gtk/atk/gdk-sys), whose build scripts probe
+# pkg-config for `atk`, `gdk-3.0`, `javascriptcoregtk-4.1`, etc. Ungated, a
+# macOS build fails in `atk-sys`' build script because none of those exist
+# there (macOS links the system WebKit.framework instead).
+webkit2gtk = "2"
+cairo-rs = { version = "0.18", features = ["png"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

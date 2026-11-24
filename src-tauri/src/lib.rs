@@ -7,6 +7,7 @@ mod commands;
 mod conflict_poll;
 mod hook_listener;
 mod idle_timeout;
+mod logging;
 mod opencode_events;
 mod pr_poll;
 mod watch;
@@ -32,15 +33,10 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 /// anything else — including unknown/future desktop environments — defaults
 /// to real decorations rather than guessing wrong toward "hide everything."
 fn decorations_for_desktop(current_desktop: Option<&str>) -> bool {
-    const TILING_WMS: &[&str] = &[
-        "hyprland", "sway", "i3", "dwm", "bspwm", "awesome", "xmonad", "qtile", "river", "wayfire",
-    ];
-    match current_desktop {
-        Some(value) => !value
-            .split(':')
-            .any(|part| TILING_WMS.contains(&part.to_lowercase().as_str())),
-        None => true,
-    }
+    // The tiling-WM list lives in `corral_core::diagnostics` so `corral
+    // doctor` reports the same classification this function acts on.
+    // `is_tiling_desktop` already treats an unset desktop as "not tiling".
+    !corral_core::diagnostics::is_tiling_desktop(current_desktop)
 }
 
 #[cfg(target_os = "linux")]
@@ -53,48 +49,117 @@ fn should_decorate() -> bool {
     true
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new("corral_app_lib=debug,corral_core=debug")
-            }),
-        )
-        .with_writer(std::io::stderr)
-        .init();
-    tracing::info!("corral starting");
-
-    // Tauri's default custom-protocol content serving (tauri://localhost)
-    // never completes navigation on this system's webkit2gtk — the window
-    // stays stuck on about:blank. Real HTTP navigation (the Vite dev server,
-    // and this plugin) works fine, so bundled builds serve assets the same
-    // way dev builds do. Separately, the ipc:// command-dispatch channel
-    // needed its own fix — see the `tauri` patch in the workspace Cargo.toml.
-    #[cfg(not(dev))]
-    let port = match portpicker::pick_unused_port() {
-        Some(port) => port,
+/// Port the bundled Linux build serves the frontend on — `None` in dev builds
+/// and on every other platform, where Tauri's default custom-protocol content
+/// serving works (see the comment in [`run`]).
+///
+/// `cfg!(dev)` (rather than a `#[cfg(dev)]` attribute) keeps `portpicker`
+/// referenced on *every* Linux build, dev included, so Cargo's
+/// unused-dependency lint sees it as used. The dead branch is optimized away.
+#[cfg(target_os = "linux")]
+fn localhost_port() -> Option<u16> {
+    if cfg!(dev) {
+        return None;
+    }
+    match portpicker::pick_unused_port() {
+        Some(port) => Some(port),
         None => {
             // A bundled build has no attached terminal, so a panic message
             // here would never be seen — log it properly and exit instead.
             tracing::error!("no unused localhost port available; corral cannot start");
             std::process::exit(1);
         }
-    };
+    }
+}
 
-    // tauri_plugin_localhost defaults to binding host "localhost", which on
-    // this system resolves/binds to [::1] (IPv6) only — but the webview's
-    // own "localhost" resolution can try 127.0.0.1 first, hitting nothing
-    // and failing with "Connection refused". Bind and navigate to the same
-    // explicit IPv4 loopback address so they can't disagree.
-    #[cfg(not(dev))]
-    let builder = tauri::Builder::default().plugin(
-        tauri_plugin_localhost::Builder::new(port)
-            .host("127.0.0.1")
-            .build(),
-    );
-    #[cfg(dev)]
-    let builder = tauri::Builder::default();
+#[cfg(not(target_os = "linux"))]
+fn localhost_port() -> Option<u16> {
+    None
+}
+
+/// Attach the localhost content server when `port` is set.
+///
+/// `tauri_plugin_localhost` defaults to binding host "localhost", which on
+/// this system resolves/binds to [::1] (IPv6) only — but the webview's own
+/// "localhost" resolution can try 127.0.0.1 first, hitting nothing and failing
+/// with "Connection refused". Bind and navigate to the same explicit IPv4
+/// loopback address so they can't disagree.
+#[cfg(target_os = "linux")]
+fn with_localhost_plugin<R: tauri::Runtime>(
+    builder: tauri::Builder<R>,
+    port: Option<u16>,
+) -> tauri::Builder<R> {
+    match port {
+        Some(port) => builder.plugin(
+            tauri_plugin_localhost::Builder::new(port)
+                .host("127.0.0.1")
+                .build(),
+        ),
+        None => builder,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn with_localhost_plugin<R: tauri::Runtime>(
+    builder: tauri::Builder<R>,
+    _port: Option<u16>,
+) -> tauri::Builder<R> {
+    builder
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    // A macOS app launched from Finder/Dock/`open` inherits launchd's minimal
+    // environment, not the user's shell: PATH has no Homebrew/pnpm/nvm
+    // entries, and anything exported from `.zprofile`/`.zshrc` is missing.
+    // Capture it here — before the Tauri builder spawns any worker thread —
+    // so `std::env::set_var` is sound and every child corral later spawns
+    // (agent PTYs, Run/Setup commands, git, gh) inherits the same environment
+    // a terminal would have. See `corral_core::shell_env` for the merge rules.
+    //
+    // Linux `.desktop` launches have the same problem; only macOS is enabled
+    // for now (a terminal-launched dev build already has the right env, and
+    // this is the platform the bug was reported on).
+    #[cfg(target_os = "macos")]
+    let shell_env_started = std::time::Instant::now();
+    #[cfg(target_os = "macos")]
+    let shell_env = corral_core::shell_env::capture();
+
+    // stderr (dev terminal) plus a rolling file under the data dir — a
+    // bundled launch has no stderr anyone can read. See `logging`'s docs.
+    logging::init();
+    tracing::info!("corral starting");
+
+    #[cfg(target_os = "macos")]
+    match shell_env {
+        Ok(vars) => {
+            // SAFETY: no threads have been started yet — `run()` is called
+            // straight from `main`, and the Tauri builder below is what
+            // spawns them.
+            let adopted = unsafe { corral_core::shell_env::apply(&vars) };
+            tracing::info!(
+                "shell_env: adopted {adopted} variables from the login shell ({}ms)",
+                shell_env_started.elapsed().as_millis()
+            );
+        }
+        Err(e) => tracing::warn!(
+            "shell_env: could not read the login shell environment: {e} \
+             (agents may not find Homebrew/pnpm/nvm binaries)"
+        ),
+    }
+
+    // On Linux, Tauri's default custom-protocol content serving
+    // (tauri://localhost) never completes navigation on this system's
+    // webkit2gtk — the window stays stuck on about:blank. Real HTTP
+    // navigation (the Vite dev server, and this plugin) works fine, so
+    // bundled Linux builds serve assets the same way dev builds do. This is
+    // specific to webkit2gtk/Wry: macOS (WKWebView) and Windows (WebView2)
+    // serve the custom protocol correctly, so they keep the normal
+    // `WebviewUrl::App` path (see the `url` selection in `setup` below).
+    // Separately, the ipc:// command-dispatch channel needed its own fix —
+    // see the `tauri` patch in the workspace Cargo.toml.
+    let localhost_port = localhost_port();
+    let builder = with_localhost_plugin(tauri::Builder::default(), localhost_port);
 
     builder
         .plugin(tauri_plugin_opener::init())
@@ -110,8 +175,10 @@ pub fn run() {
             commands::system::notify_icon,
             commands::system::send_notification,
             commands::system::home_dir,
+            commands::system::platform_defaults,
             commands::system::memory_usage,
             commands::fonts::list_monospace_fonts,
+            commands::system::copy_diagnostics,
             commands::projects::list_projects,
             commands::projects::project_icon,
             commands::projects::add_project,
@@ -176,13 +243,20 @@ pub fn run() {
         .setup(move |app| {
             app.manage(browser_host::BrowserHosts::default());
 
-            #[cfg(dev)]
-            {
-                WebviewWindowBuilder::new(
-                    app,
-                    "main",
-                    WebviewUrl::App(std::path::PathBuf::from("/")),
-                )
+            // Bundled Linux builds load from the localhost plugin (see the
+            // `port`/`builder` setup above — capabilities/default.json grants
+            // that origin the same permissions as local content via its
+            // `remote.urls` wildcard, so no runtime capability is needed).
+            // Dev builds and non-Linux platforms use the normal
+            // custom-protocol asset serving.
+            let url = match localhost_port {
+                Some(port) => tauri::Url::parse(&format!("http://127.0.0.1:{port}"))
+                    .map(WebviewUrl::External)
+                    .expect("just-formatted loopback URL"),
+                None => WebviewUrl::App(std::path::PathBuf::from("/")),
+            };
+
+            WebviewWindowBuilder::new(app, "main", url)
                 .title("Corral")
                 .inner_size(1100.0, 720.0)
                 // Must stay >= the app grid's hard floor (256px sidebar +
@@ -192,25 +266,6 @@ pub fn run() {
                 .min_inner_size(1040.0, 480.0)
                 .decorations(should_decorate())
                 .build()?;
-            }
-
-            #[cfg(not(dev))]
-            {
-                // capabilities/default.json grants this origin the same
-                // permissions as local content via a `remote.urls` wildcard
-                // (`http://127.0.0.1:*`), so no runtime capability is needed.
-                let url: tauri::Url = format!("http://127.0.0.1:{port}").parse().unwrap();
-                WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
-                    .title("Corral")
-                    .inner_size(1100.0, 720.0)
-                    // Must stay >= the app grid's hard floor (256px sidebar +
-                    // 480px min middle column + 280px changes pane = 1016px in
-                    // src/styles.css's `.app` rule), or the window can shrink
-                    // past what the layout can render and clip content.
-                    .min_inner_size(1040.0, 480.0)
-                    .decorations(should_decorate())
-                    .build()?;
-            }
 
             // Self-healing: a worktree removed out-of-band (not through
             // corral's own `worktree::remove`) leaves orphaned entries in the

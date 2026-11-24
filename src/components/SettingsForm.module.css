@@ -124,3 +124,13 @@
 .soundRow select {
   flex: 1;
 }
+
+/* Diagnostics action at the bottom of the form: a button plus its hint,
+   visually separated from the preferences above since it doesn't change
+   anything. */
+.diagnostics {
+  @apply flex flex-col items-start gap-1;
+  margin-top: 4px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
+}

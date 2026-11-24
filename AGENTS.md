@@ -7,10 +7,14 @@
 
 ## What corral is
 
-A **Linux-native Tauri desktop app** for running multiple parallel coding-agent
-sessions, each isolated in its own git worktree. Each agent is a real CLI
-process (Claude Code, OpenCode, or Pi) running in a PTY, shown in an embedded
-terminal. There's also a `corral` CLI.
+A **Tauri desktop app for Linux and macOS** for running multiple parallel
+coding-agent sessions, each isolated in its own git worktree. Each agent is a
+real CLI process (Claude Code, OpenCode, or Pi) running in a PTY, shown in an
+embedded terminal. There's also a `corral` CLI.
+
+Windows is not supported yet: the code still assumes a Unix process model
+(Unix-socket hooks, `symlink`'d `.claude` dirs, `/proc`-based process
+tracking, `systemd-inhibit`/`caffeinate` sleep guards).
 
 ## Architecture
 
@@ -190,10 +194,45 @@ git push origin HEAD
 git push origin vX.Y.Z   # pushes the tag, which triggers the Release workflow
 ```
 
-The `.github/workflows/release.yml` workflow runs on `v*` tag pushes, verifies
-the tag matches the Cargo.toml version, builds the `.deb`/`.rpm`/`.AppImage`
-bundles, and publishes them as a GitHub Release. Use `--no-commit` /
-`--no-tag` on the script to stop short (e.g. `just bump patch --no-tag`).
+The `.github/workflows/release.yml` workflow runs on `v*` tag pushes, builds
+the Linux bundles, and publishes them in one GitHub Release:
+
+- **Linux** (`ubuntu-latest`): `.deb` / `.rpm` / `.AppImage`.
+
+The tag is re-verified against the Cargo.toml version before bundling. Use
+`--no-commit` / `--no-tag` on the script to stop short (e.g.
+`just bump patch --no-tag`).
+
+**macOS is built by hand, not in the release workflow.** macOS runners are the
+one standard runner GitHub does *not* make free on a public repo (a 10×
+multiplier against an included allowance a GitHub Free user account doesn't
+have), so a `macos-14` job dies at scheduling with zero steps run — which
+takes the whole run down to `cancelled` and stops Linux publishing, since
+`publish` needs it. There is no free tier to wait for. To ship a `.dmg`:
+
+```fish
+# On a Mac, from the tagged checkout:
+pnpm install
+just bundle                      # or: pnpm tauri build --target universal-apple-darwin
+gh release upload vX.Y.Z \
+    target/universal-apple-darwin/release/bundle/dmg/*.dmg
+```
+
+Alternatively, run the Release workflow by hand with `build_macos` ticked
+(Actions → Release → Run workflow) and attach the resulting
+`macos-bundles` artifact to the release. That job is `continue-on-error` and
+opt-in, so it can never block or cancel a Linux release.
+
+macOS signing + notarization is still opt-in via repository secrets
+(`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`,
+`APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`); with none configured the dmg is
+unsigned and needs Gatekeeper's right-click → Open on first launch.
+
+There is deliberately **no macOS job in `ci.yml`**: it would never run, and a
+green check that silently means "macOS was never compiled" is worse than none.
+`cfg(target_os = "macos")` code is therefore only compiled when someone builds
+on a Mac — keep that in mind when touching `process.rs`, `caffeinate.rs`, or
+`shell_env.rs`.
 
 ## Gotchas / hard-won lessons
 
@@ -239,6 +278,31 @@ bundles, and publishes them as a GitHub Release. Use `--no-commit` /
   unchanged for the `inset-0` panes. If a new terminal container uses padding
   and looks a row short/tall, add `.xterm-fit` — don't "fix" it by trimming
   padding.
+- **Gate platform-specific workarounds on `target_os`, not just `dev`.**
+  Now that macOS builds ship too, a bare `cfg(not(dev))` means "every release
+  build on every OS." The localhost-plugin content-serving workaround is
+  webkit2gtk-only, so it's `#[cfg(all(not(dev), target_os = "linux"))]` (and
+  the Linux webview gets `WebviewUrl::External` while dev/macOS use the normal
+  `WebviewUrl::App`). The sleep inhibitor (`systemd-inhibit` vs `caffeinate`)
+  and the process-tree RSS walk (`/proc` vs a `ps` snapshot) are likewise
+  per-platform. The `[patch.crates-io]` tauri/wry forks can't be target-gated
+  (Cargo has no per-target `[patch]`), so they apply everywhere, but their
+  fixes are Linux-only at runtime.
+- **A GUI-launched corral doesn't inherit the user's shell environment.**
+  macOS apps started from Finder/Dock/`open` get launchd's minimal env, not
+  `~/.zprofile`/`~/.zshrc` — so `PATH` has no Homebrew/pnpm/nvm entries and
+  exported vars (`ANTHROPIC_API_KEY`, …) are missing, which is what made Run
+  commands fail on a fresh Mac install. `corral_core::shell_env` runs the
+  login+interactive shell once at startup (`login_shell()` reads the passwd
+  entry like Terminal.app, `-l -i -c`, `env -0` with a newline fallback for
+  macOS < 13) and merges the result into corral's own process environment
+  *before* the Tauri builder starts any threads — `std::env::set_var` is
+  unsafe in edition 2024, so that ordering is load-bearing. Existing vars win
+  (so `CORRAL_CONFIG_DIR` from `just run-dev` survives); `PATH` is the one
+  exception, taking the shell's value with app-only entries appended. Don't
+  swap this for `fix-path-env`'s `fix_all_vars()`, which overwrites
+  `CORRAL_CONFIG_DIR` and friends. Only wired up on macOS; Linux `.desktop`
+  launches have the same gap and could enable the same call.
 - **Bundled builds need webkit2gtk workarounds on this system (CachyOS
   rolling release, `webkit2gtk-4.1 2.52.x`).** Two separate upstream bugs,
   both worked around, both required to get past a blank white

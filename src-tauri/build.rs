@@ -1,11 +1,33 @@
+/// Short git sha for diagnostics (`copy_diagnostics`, mirroring `corral
+/// --version`). Falls back to `"unknown"` outside a git checkout or when
+/// `git` isn't on `PATH`, so a source-tarball build still succeeds.
+fn git_sha() -> String {
+    use std::process::Command;
+    Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 fn main() {
+    println!("cargo:rustc-env=CORRAL_GIT_SHA={}", git_sha());
+    println!("cargo:rerun-if-changed=../.git/HEAD");
+    println!("cargo:rerun-if-changed=../.git/index");
+
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "notify_icon",
             "send_notification",
             "home_dir",
+            "platform_defaults",
             "memory_usage",
             "list_monospace_fonts",
+            "copy_diagnostics",
             "list_projects",
             "project_icon",
             "add_project",

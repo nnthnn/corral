@@ -8,10 +8,14 @@
 
 </div>
 
-A Linux-native desktop app for running multiple parallel coding-agent sessions,
-each isolated in its own git worktree. Every session gets its own worktree,
-branch, and PTY, so several agents can work at once without stepping on each
-other. Claude Code, OpenCode, and Pi are all supported.
+A Linux and macOS desktop app for running multiple parallel coding-agent
+sessions, each isolated in its own git worktree. Every session gets its own
+worktree, branch, and PTY, so several agents can work at once without stepping
+on each other. Claude Code, OpenCode, and Pi are all supported.
+
+> Windows isn't supported yet — the app still assumes a Unix process model
+> (Unix-socket hooks, symlinked `.claude` dirs, `/proc`-based process
+> tracking). Linux and macOS are the supported platforms for now.
 
 ![corral's three-pane shell: an agent working in one worktree, with the Changes
 pane listing that branch's diff](docs/assets/corral-overview.png)
@@ -37,8 +41,27 @@ branch diffs](docs/assets/corral-demo.gif)
 
 ## Install
 
-Download the latest `.deb`, `.rpm`, or `.AppImage` from the
+Download the latest `.deb`, `.rpm`, or `.AppImage` (Linux) from the
 [Releases](https://github.com/nnthnn/corral/releases) page.
+
+macOS builds (`.dmg`, universal binary) are attached by hand when there is one
+— they aren't produced by the release workflow, because macOS CI runners are
+the one standard runner GitHub doesn't make free on a public repo. Those builds
+are unsigned unless signed with the relevant secrets, so the first launch may
+need **right-click → Open** to get past Gatekeeper.
+
+Build one yourself from a checkout on a Mac:
+
+```sh
+pnpm install
+pnpm tauri build --target universal-apple-darwin
+# target/universal-apple-darwin/release/bundle/dmg/*.dmg
+```
+
+On macOS, corral reads your login shell's environment once at startup — the
+same way Terminal.app does — so Homebrew/nvm/pnpm binaries and anything you
+export from `.zprofile`/`.zshrc` are available to agent sessions and Run
+commands.
 
 ## Layout
 
@@ -54,9 +77,10 @@ corral/
 
 ## Develop
 
-Requirements: Rust, Node + pnpm, and the Linux WebKitGTK stack
-(`webkit2gtk-4.1`, `libsoup-3.0`). `git`, your agent CLI (`claude` and/or
-`opencode`), `gh` (for PRs), and `zeditor` (Zed's CLI) should be on PATH.
+Requirements: Rust, Node + pnpm, and — on Linux — the WebKitGTK stack
+(`webkit2gtk-4.1`, `libsoup-3.0`). macOS needs only Xcode's command-line tools.
+`git`, your agent CLI (`claude` and/or `opencode`), `gh` (for PRs), and your
+editor's CLI (`zeditor` on Linux, `zed` on macOS) should be on PATH.
 
 ```fish
 pnpm install        # frontend deps + Tauri CLI
@@ -85,7 +109,19 @@ corral config get                         # print the resolved worktrees root
 corral config set <path>                  # override the worktrees root
 corral config reset                       # revert to the default (~/corral)
 corral awake -- <command>                 # run a command under a sleep/idle inhibitor
+corral doctor                             # paste-able machine/state snapshot for bug reports
 ```
+
+`corral doctor` prints a read-only snapshot of the machine as corral sees it:
+resolved agent/git/`gh` executables and versions, desktop + WebKit versions,
+config/data health, and a `warnings` list for anything that looks wrong (the
+active harness's binary missing, an unparseable `settings.json`, no sleep
+inhibitor, …). Use `--json` for machine-readable output or `--markdown` for a
+code block ready to paste into an issue. It never touches the network, never
+writes to disk, and reports state as counts with `~`-abbreviated paths — no
+project names, file contents, or prompts. The GUI's **Settings → Copy
+diagnostics** button produces the same report plus the tail of the app's log
+(`~/.local/share/corral/logs/`).
 
 `corral awake` is the portable sleep guard agents use for long-running
 background work (scans, test suites, dev servers, watchers). It holds

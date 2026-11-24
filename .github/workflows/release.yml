@@ -3,16 +3,58 @@ name: Release
 # Builds the Linux bundles (.deb / .rpm / .AppImage) and publishes a GitHub
 # Release whenever a vX.Y.Z tag is pushed. The tag is created by
 # scripts/bump-version.sh, so the version in Cargo.toml and the tag are
-# expected to agree — verified below before we spend time bundling.
+# expected to agree — verified in each job before spending time bundling.
+#
+# macOS is deliberately NOT part of the default build. macOS runners are the
+# one standard runner GitHub doesn't make free on a public repo, so shipping a
+# `macos-14` job in the tag path means the release either costs money every
+# time or silently fails; see README's "Releasing" note for the manual .dmg
+# path (build via `just bundle` on a Mac, or run this workflow by hand with
+# `build_macos` ticked, then attach the artifact to the release).
+#
+# Manual runs (Actions → Release → Run workflow) build for inspection and
+# never publish.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      build_macos:
+        description: "Also build the macOS .dmg (spends paid macOS-runner minutes)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write # softprops/action-gh-release needs this to create the release
 
+# A dry run and a tag push for the same commit share a group, so a
+# `workflow_dispatch` fired moments before the tag can't leave its build
+# racing the real one. `github.workflow` keeps this scoped to Release runs.
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  release:
+  # Is this run allowed to publish, and is there a tag to check the version
+  # against? A tag push consults `GITHUB_REF_NAME`; a manual run has no usable
+  # ref of that shape, so version verification is skipped there (the tag check
+  # below is the only use of `GITHUB_REF_NAME`, so there's nothing to fall
+  # back to — and nothing to publish).
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ github.event_name == 'push' }}
+    steps:
+      - name: Explain this run
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "Tag push — will publish a GitHub release for ${{ github.ref_name }}"
+          else
+            echo "Manual run — building both platforms for inspection only; nothing will be published."
+          fi
+
+  linux:
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -49,8 +91,10 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # Guard against a tag that doesn't match the committed version (e.g. a
-      # hand-made tag or a bump that was reverted after tagging).
+      # hand-made tag or a bump that was reverted after tagging). Only
+      # meaningful on a tag push — see `prepare`.
       - name: Verify tag matches Cargo.toml version
+        if: github.event_name == 'push'
         run: |
           tag_version="${GITHUB_REF_NAME#v}"
           cargo_version="$(sed -n 's/^version = "\([^"]*\)".*/\1/p' Cargo.toml | head -n1)"
@@ -71,11 +115,114 @@ jobs:
       - name: Build release bundles
         run: pnpm tauri build
 
-      - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+      - name: Upload Linux bundles
+        uses: actions/upload-artifact@v7
         with:
-          generate_release_notes: true
-          files: |
+          name: linux-bundles
+          if-no-files-found: error
+          path: |
             target/release/bundle/deb/*.deb
             target/release/bundle/rpm/*.rpm
             target/release/bundle/appimage/*.AppImage
+
+  macos:
+    needs: prepare
+    # Opt-in, not part of the default release path: macOS runners are the one
+    # standard runner GitHub does NOT make free on a public repo (10x multiplier
+    # against an included allowance a personal account doesn't have), so a
+    # `macos-14` job dies at scheduling with zero steps run. `workflow_dispatch`
+    # with `build_macos` ticked is the dry run that produces a .dmg to attach to
+    # a release by hand; see README's "Releasing" note.
+    #
+    # `continue-on-error` is load-bearing even when skipped: `publish` needs
+    # this job, so without it a cancel/failure here takes the whole run down to
+    # `cancelled` and Linux never publishes — which is exactly what happened
+    # the first time this workflow ran.
+    if: github.event_name == 'workflow_dispatch' && inputs.build_macos
+    continue-on-error: true
+    # macOS runners are arm64; building the universal binary also needs the
+    # x86_64 target installed (below), which is why this is one job rather
+    # than one per architecture.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust (both macOS targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache cargo registry/build
+        uses: Swatinem/rust-cache@v2
+
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify tag matches Cargo.toml version
+        if: github.event_name == 'push'
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          cargo_version="$(sed -n 's/^version = "\([^"]*\)".*/\1/p' Cargo.toml | head -n1)"
+          if [[ "$tag_version" != "$cargo_version" ]]; then
+            echo "error: tag '$GITHUB_REF_NAME' does not match version '$cargo_version' in Cargo.toml" >&2
+            exit 1
+          fi
+          echo "Building corral v$cargo_version"
+
+      # Signing/notarization is opt-in: configure the six secrets below and
+      # Tauri signs + notarizes with them. With none set, the build still
+      # succeeds but produces an unsigned .dmg (Gatekeeper needs a
+      # right-click → Open on first launch). Empty secrets are unset rather
+      # than passed through, because an empty APPLE_CERTIFICATE would make
+      # the bundler try to import an empty certificate and fail.
+      - name: Build universal release bundles
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for var in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD \
+                     APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!var}" ]; then unset "$var"; fi
+          done
+          pnpm tauri build --target universal-apple-darwin
+
+      - name: Upload macOS bundles
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-bundles
+          if-no-files-found: error
+          path: |
+            target/universal-apple-darwin/release/bundle/dmg/*.dmg
+
+  publish:
+    # Skipped entirely on a manual run: a dry run must never create a release.
+    if: needs.prepare.outputs.publish == 'true'
+    # Deliberately does NOT need `macos`: that job is skipped on a tag push, and
+    # a skipped job in `needs:` would skip this one too. The Linux bundles are
+    # the release; a .dmg is attached by hand afterwards when there is one.
+    needs: [prepare, linux]
+    runs-on: ubuntu-latest
+    steps:
+      # Both build jobs upload their own artifacts; merge them into one flat
+      # directory (the filenames don't collide across platforms) so a single
+      # release-publishing step owns creating the release.
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          files: artifacts/*

@@ -280,3 +280,11 @@ export interface RunTargets {
   source: string | null;
   targets: RunTarget[];
 }
+
+/** The backend's platform defaults for the editor/terminal commands (see
+ * `commands::system::platform_defaults`). `Settings::default()` seeds the same
+ * values, so this is what a blank settings field should round-trip to. */
+export interface PlatformDefaults {
+  editor_command: string;
+  terminal_command: string;
+}

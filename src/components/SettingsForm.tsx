@@ -1,5 +1,6 @@
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import clsx from "clsx";
-import { ArrowLeft, Check, Loader2, Volume2 } from "lucide-react";
+import { ArrowLeft, Check, Copy, Loader2, Volume2 } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import {
   FALLBACK_MONOSPACE_FONTS,
@@ -9,8 +10,9 @@ import {
 } from "../lib/fonts";
 import { playSoundChoice, SOUND_OPTIONS } from "../lib/notifications";
 import { cancelScheduledSettingsSave, saveSettings } from "../lib/settings";
+import { invoke } from "../lib/tauri";
 import { useStore } from "../store";
-import type { Settings, SoundChoice } from "../types";
+import type { PlatformDefaults, Settings, SoundChoice } from "../types";
 import { Button } from "./Button";
 import styles from "./SettingsForm.module.css";
 
@@ -31,6 +33,14 @@ export function SettingsForm() {
     families: FALLBACK_MONOSPACE_FONTS,
     enumerated: false,
   });
+  // The backend's platform defaults for the two command fields. A blank field
+  // must persist *these* (macOS: `zed`/`open`), not a hardcoded Linux value —
+  // the backend's `Settings::default()` seeds the same pair, so saving the
+  // default verbatim round-trips instead of silently pinning `ghostty` on a
+  // Mac. Starts `null` and falls back to the loaded settings' own values, so a
+  // slow/mocked backend can't make the field look empty.
+  const [platformDefaults, setPlatformDefaults] =
+    useState<PlatformDefaults | null>(null);
   const [diffFontSize, setDiffFontSize] = useState(
     String(initial.diff_font_size),
   );
@@ -86,12 +96,39 @@ export function SettingsForm() {
   );
   const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [diagState, setDiagState] = useState<"idle" | "copying" | "copied">(
+    "idle",
+  );
+
+  /** Gather the diagnostics blob (same snapshot as `corral doctor`, plus the
+   * app's log tail) and put it on the clipboard, ready to paste into an
+   * issue. Deliberately not part of the settings form: it's an action, not a
+   * preference, and it doesn't need saving. */
+  async function copyDiagnostics() {
+    setDiagState("copying");
+    try {
+      const text = await invoke("copy_diagnostics");
+      await writeText(text);
+      setDiagState("copied");
+    } catch (err) {
+      setError(String(err));
+      setDiagState("idle");
+    }
+    setTimeout(() => setDiagState("idle"), 2000);
+  }
 
   useEffect(() => {
     let cancelled = false;
     monospaceFonts().then((fonts) => {
       if (!cancelled) setTerminalFonts(fonts);
     });
+    // Advisory only: if the backend can't answer, the save path falls back to
+    // whatever is already in the field, so nothing is lost.
+    invoke("platform_defaults")
+      .then((defaults) => {
+        if (!cancelled) setPlatformDefaults(defaults);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -139,10 +176,19 @@ export function SettingsForm() {
     // in TerminalHost.tsx) when they detect a change, so `s.settings` captured
     // before those calls is stale. Spreading from a fresh read here ensures
     // we don't clobber the font values they just applied.
+    // Fall back to the loaded value (not a hardcoded string) so a failed
+    // `platform_defaults` fetch can never blank out a real setting. If the
+    // stored value is *also* blank, save the platform default so a
+    // hand-edited `settings.json` with "" gets repaired on the next Save
+    // instead of persisting an empty command.
     const current = useStore.getState().settings;
+    const editorFallback =
+      platformDefaults?.editor_command || current.editor_command;
+    const terminalFallback =
+      platformDefaults?.terminal_command || current.terminal_command;
     const updated = {
       ...current,
-      editor_command: editorCommand.trim() || "zeditor",
+      editor_command: editorCommand.trim() || editorFallback || "zeditor",
       notifications_enabled: notificationsEnabled,
       extra_instructions: extraInstructions.trim(),
       skip_permissions: skipPermissions,
@@ -163,7 +209,7 @@ export function SettingsForm() {
       delete_branch_default: deleteBranchDefault,
       caffeinate_enabled: caffeinateEnabled,
       worktrees_root: trimmedWorktreesRoot,
-      terminal_command: terminalCommand.trim() || "ghostty",
+      terminal_command: terminalCommand.trim() || terminalFallback || "ghostty",
       idle_timeout_enabled: idleTimeoutEnabled,
       idle_timeout_minutes:
         Number.isFinite(parsedIdleTimeoutMinutes) &&
@@ -238,7 +284,7 @@ export function SettingsForm() {
               Editor command
               <input
                 list="editor-command-list"
-                placeholder="zeditor"
+                placeholder={platformDefaults?.editor_command ?? "zeditor"}
                 required
                 value={editorCommand}
                 onChange={(e) => setEditorCommand(e.target.value)}
@@ -256,7 +302,7 @@ export function SettingsForm() {
               Terminal command
               <input
                 list="terminal-command-list"
-                placeholder="ghostty"
+                placeholder={platformDefaults?.terminal_command ?? "ghostty"}
                 required
                 value={terminalCommand}
                 onChange={(e) => setTerminalCommand(e.target.value)}
@@ -265,12 +311,14 @@ export function SettingsForm() {
                 <option value="ghostty" />
                 <option value="alacritty" />
                 <option value="kitty" />
+                <option value="open" />
               </datalist>
             </label>
             <p className="hint">
               Run by the "Shell" button using <code>--working-directory</code>{" "}
               (Ghostty/Alacritty/Kitty); other terminals may need a different
-              flag.
+              flag. On macOS, <code>open</code> opens Terminal at the worktree
+              path.
             </p>
             <label>
               Worktrees root
@@ -625,6 +673,27 @@ export function SettingsForm() {
           Appended to every new session's system prompt, alongside Corral's own
           briefing. Doesn't apply retroactively.
         </p>
+        <div className={styles.diagnostics}>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={copyDiagnostics}
+            disabled={diagState === "copying"}
+          >
+            {diagState === "copied" ? <Check size={14} /> : <Copy size={14} />}
+            {diagState === "copying"
+              ? "Collecting…"
+              : diagState === "copied"
+                ? "Copied"
+                : "Copy diagnostics"}
+          </Button>
+          <p className="hint">
+            Copies versions, resolved executables, desktop/WebKit info, config
+            health, and the tail of this app's log — the same thing{" "}
+            <code>corral doctor</code> prints. Contains no project names, file
+            contents, or prompts. Paste it into a bug report.
+          </p>
+        </div>
         {error && <p className="error">{error}</p>}
       </div>
     </form>

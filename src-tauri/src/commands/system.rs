@@ -173,13 +173,78 @@ pub fn home_dir() -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
+/// The platform's default external-editor and external-terminal commands —
+/// the same values `Settings::default()` seeds, so the frontend can persist a
+/// blank field as the *actual* default instead of hardcoding a Linux-only
+/// fallback (`zeditor`/`ghostty`) that would clobber macOS's `zed`/`open`.
+#[derive(serde::Serialize)]
+pub struct PlatformDefaults {
+    editor_command: &'static str,
+    terminal_command: &'static str,
+}
+
+#[tauri::command]
+pub fn platform_defaults() -> PlatformDefaults {
+    PlatformDefaults {
+        editor_command: corral_core::settings::DEFAULT_EDITOR_COMMAND,
+        terminal_command: corral_core::settings::DEFAULT_TERMINAL_COMMAND,
+    }
+}
+
 /// Total resident memory (RSS) of this process and all its descendants, in
-/// bytes — `None` on platforms without `/proc` (non-Linux). Polled by the
-/// sidebar header to answer "is this eating my RAM" across parallel agents.
+/// bytes — `None` on platforms without a process-tree walk wired up yet
+/// (see `corral_core::process`). Polled by the sidebar header to answer "is
+/// this eating my RAM" across parallel agents.
 #[tauri::command]
 pub fn memory_usage() -> Option<u64> {
     corral_core::process::total_rss_bytes()
 }
+
+/// A Markdown "corral diagnostics" block for a bug report: the same snapshot
+/// `corral doctor` prints, plus the tail of the app's own log file (which a
+/// bundled launch would otherwise never let anyone see). The frontend copies
+/// the returned string straight to the clipboard — nothing here reads the
+/// network or writes to disk.
+///
+/// `async` for dispatch reasons, not for awaiting inside: a non-`async`
+/// command runs inline on the IPC thread (in practice the GTK main loop), so
+/// the probes below — up to nine sequential subprocesses with 3–8s timeouts,
+/// including `gh auth status` and a full `git status` scan per worktree —
+/// froze every window for seconds. `spawn_blocking` moves the whole blocking
+/// body to Tauri's thread pool, same shape as `list_monospace_fonts`. See
+/// `start_session`'s comment for the full explanation of the split.
+#[tauri::command]
+pub async fn copy_diagnostics(app: tauri::AppHandle) -> Result<String, String> {
+    let version = format!(
+        "{} ({})",
+        app.package_info().version,
+        env!("CORRAL_GIT_SHA")
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let report = corral_core::diagnostics::collect(&version, "corral-app");
+        let mut out = corral_core::diagnostics::render_markdown(&report);
+        out.push_str(&format!(
+            "\n### recent log tail\n\n```\n{}\n```\n",
+            app_log_tail()
+        ));
+        out
+    })
+    .await
+    .map_err(|e| format!("diagnostics failed: {e}"))
+}
+
+/// The last lines of this process's rolling log, with a clear placeholder
+/// when no log file could be written (stderr-only fallback).
+fn app_log_tail() -> String {
+    match crate::logging::tail(LOG_TAIL_LINES) {
+        Some(text) if !text.is_empty() => text,
+        _ => "(no log file yet — logs may be going to stderr only)".to_string(),
+    }
+}
+
+/// How much of the log the diagnostics blob carries. Enough for several
+/// startup + failure cycles without making the paste unwieldy.
+const LOG_TAIL_LINES: usize = 400;
 
 #[tauri::command]
 pub fn open_in_zed(path: String, editor_command: String) -> Result<(), String> {
@@ -191,9 +256,12 @@ pub fn open_in_zed(path: String, editor_command: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Kitty's CLI flag for the startup directory is `--directory`/`-d`, not
-/// `--working-directory` (Ghostty/Alacritty). Matched on the command's file
-/// name so a full path (e.g. `/usr/bin/kitty`) still resolves correctly.
+/// Terminal-specific way of asking for a starting directory. Kitty's flag is
+/// `--directory`/`-d`, not `--working-directory` (Ghostty/Alacritty), and
+/// macOS's `open` takes an app plus the folder to hand it — `open -a Terminal
+/// <dir>` is the macOS equivalent of `--working-directory`. Matched on the
+/// command's file name so a full path (e.g. `/usr/bin/kitty`) still resolves
+/// correctly.
 fn terminal_args(terminal_command: &str, path: &str) -> Vec<String> {
     let program_name = std::path::Path::new(terminal_command)
         .file_name()
@@ -201,6 +269,7 @@ fn terminal_args(terminal_command: &str, path: &str) -> Vec<String> {
         .unwrap_or(terminal_command);
     match program_name {
         "kitty" => vec!["--directory".to_string(), path.to_string()],
+        "open" => vec!["-a".to_string(), "Terminal".to_string(), path.to_string()],
         _ => vec![format!("--working-directory={path}")],
     }
 }
@@ -238,6 +307,18 @@ mod tests {
         assert_eq!(
             terminal_args("kitty", "/some/path"),
             vec!["--directory".to_string(), "/some/path".to_string()]
+        );
+    }
+
+    #[test]
+    fn terminal_args_uses_open_app_terminal_for_macos() {
+        assert_eq!(
+            terminal_args("open", "/some/path"),
+            vec![
+                "-a".to_string(),
+                "Terminal".to_string(),
+                "/some/path".to_string()
+            ]
         );
     }
 
