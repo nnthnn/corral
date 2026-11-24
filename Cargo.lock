@@ -721,7 +721,7 @@ dependencies = [
 
 [[package]]
 name = "corral-app"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "cairo-rs",
@@ -755,7 +755,7 @@ dependencies = [
 
 [[package]]
 name = "corral-cli"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -770,7 +770,7 @@ dependencies = [
 
 [[package]]
 name = "corral-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "dirs",
