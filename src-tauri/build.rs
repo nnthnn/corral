@@ -64,6 +64,7 @@ fn main() {
             "browser_go_back",
             "browser_go_forward",
             "browser_reload",
+            "browser_refresh_titles",
         ]),
     ))
     .expect("failed to run tauri-build");

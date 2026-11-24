@@ -57,6 +57,11 @@ export function SettingsForm() {
   const [skipPermissions, setSkipPermissions] = useState(
     initial.skip_permissions,
   );
+  // `!== false`: an older backend that doesn't send this field should read as
+  // enabled (the pre-setting behavior), matching `auto_setup`'s handling.
+  const [browserEnabled, setBrowserEnabled] = useState(
+    initial.browser_enabled !== false,
+  );
   const [coAuthorTrailer, setCoAuthorTrailer] = useState(
     initial.co_author_trailer,
   );
@@ -141,6 +146,7 @@ export function SettingsForm() {
       notifications_enabled: notificationsEnabled,
       extra_instructions: extraInstructions.trim(),
       skip_permissions: skipPermissions,
+      browser_enabled: browserEnabled,
       co_author_trailer: coAuthorTrailer,
       sound_enabled: soundEnabled,
       sound_choice: soundChoice,
@@ -371,6 +377,22 @@ export function SettingsForm() {
                   Path or command; blank uses <code>opencode</code> from{" "}
                   <code>PATH</code>. Install via{" "}
                   <code>pnpm add -g @opencode/cli</code>. New sessions only.
+                </p>
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={browserEnabled}
+                    onChange={(e) => setBrowserEnabled(e.target.checked)}
+                  />
+                  <span className="min-w-0">
+                    Attach corral's embedded browser (OpenCode browser tools)
+                  </span>
+                </label>
+                <p className="hint">
+                  Lets the agent drive a corral-owned browser window via
+                  OpenCode's <code>browser.*</code> tools. Turning this off
+                  leaves those tools unavailable and starts nothing extra. New
+                  sessions only.
                 </p>
               </>
             )}

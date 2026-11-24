@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::io::BufRead;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -56,6 +57,20 @@ impl BrowserHosts {
     fn remove(&self, id: &str) -> Option<Arc<Host>> {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).remove(id)
     }
+
+    /// Tear down every host, closing its browser window. Called on app exit so
+    /// child page webviews never outlive the process that owns them — a
+    /// browser window left open by a dying app is otherwise an unmanaged
+    /// remote-content surface.
+    fn close_all(&self) {
+        let hosts: Vec<Arc<Host>> = {
+            let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            map.drain().map(|(_, host)| host).collect()
+        };
+        for host in hosts {
+            host.shutdown();
+        }
+    }
 }
 
 struct Host {
@@ -71,6 +86,13 @@ struct Host {
     session_id: String,
     connection_id: String,
     window: Arc<BrowserWindow>,
+    /// Set by [`Host::shutdown`]; see there for why it exists.
+    closed: AtomicBool,
+    /// Set while a `cancel` control event names the request currently
+    /// executing, and cleared when the next one starts. `evaluate`/`wait` poll
+    /// it so an agent that gave up on a hung page doesn't keep the command
+    /// queue blocked for the full timeout.
+    cancel: AtomicBool,
 }
 
 /// Payload for the frontend `browser-preview` event.
@@ -104,6 +126,8 @@ pub fn spawn(
         session_id: session.root_session_id,
         connection_id: format!("corral-{}", Uuid::new_v4()),
         window,
+        closed: AtomicBool::new(false),
+        cancel: AtomicBool::new(false),
     });
 
     if let Some(hosts) = app.try_state::<BrowserHosts>()
@@ -111,7 +135,7 @@ pub fn spawn(
     {
         // A restarted session for the same worktree: close the previous
         // host's browser window rather than leaving an orphan behind.
-        previous.window.close_all();
+        previous.shutdown();
     }
 
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
@@ -130,12 +154,61 @@ pub struct OpenCodeSession {
     pub password: String,
 }
 
+/// Tear down the browser host for corral session `id`, if any, closing its
+/// browser window and dropping it from the registry. Called by the session
+/// lifecycle (`kill_session_best_effort`, `close_session`, and the stale-exit
+/// prune) — the host's own threads also call this when their stream or attach
+/// ends, but a session can be stopped while those threads are mid-call (a
+/// `browser.evaluate` polls for up to 30s), so teardown must not depend on
+/// them noticing. Idempotent; safe to call for an id that has no host.
+pub fn shutdown(app: &AppHandle, id: &str) {
+    if let Some(hosts) = app.try_state::<BrowserHosts>()
+        && let Some(host) = hosts.remove(id)
+    {
+        // The panic hazard: `host.shutdown()` closes webviews synchronously on
+        // the caller's thread, and the caller is usually a session-lifecycle
+        // path. Never let a browser-window teardown failure poison that path.
+        if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| host.shutdown())) {
+            tracing::warn!("browser_host: tearing down {id} panicked: {e:?}");
+        }
+    }
+}
+
+/// Tear down every browser host — used on app exit so no browser window (and
+/// the remote page webviews inside it) outlives corral.
+pub fn shutdown_all(app: &AppHandle) {
+    if let Some(hosts) = app.try_state::<BrowserHosts>() {
+        hosts.close_all();
+    }
+}
+
 impl Host {
+    /// Tear this host down: close its browser window and drop it from the
+    /// registry. Idempotent and safe to call from any thread — several exits
+    /// race on a normal session stop (the SSE stream ends, the attach call
+    /// returns, the session is killed), and every one of them must be a no-op
+    /// after the first.
     fn shutdown(&self) {
+        if self.closed.swap(true, Ordering::SeqCst) {
+            return;
+        }
         self.window.close_all();
         if let Some(hosts) = self.app.try_state::<BrowserHosts>() {
-            hosts.remove(&self.id);
+            // Only remove *ourselves*: a restarted session inserts its new
+            // host under the same key before this old one tears down, and the
+            // old host must not evict the replacement.
+            let mut map = hosts.0.lock().unwrap_or_else(|e| e.into_inner());
+            if map
+                .get(&self.id)
+                .is_some_and(|current| std::ptr::eq(current.as_ref(), self))
+            {
+                map.remove(&self.id);
+            }
         }
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
     }
 
     fn send_state(&self) {
@@ -164,6 +237,13 @@ fn attach_loop(host: Arc<Host>, ready: Receiver<()>) {
     const MAX_ATTEMPTS: usize = 120;
     let _ = ready.recv_timeout(Duration::from_secs(5));
     for attempt in 0..MAX_ATTEMPTS {
+        // Re-checked each attempt: the session can be stopped (or the app
+        // exit) while this thread is sleeping out a retry, and continuing to
+        // call `attach` after teardown would either resurrect the host or
+        // spew transport errors for two minutes.
+        if host.is_closed() {
+            return;
+        }
         match opencode::browser_attach(
             &host.base_url,
             &host.password,
@@ -207,6 +287,9 @@ fn event_loop(host: Arc<Host>, ready: Sender<()>, commands: Sender<String>) {
     // Retry only the *initial* subscription. Once a stream has been
     // established, losing it means the paired server is gone.
     for attempt in 0..30 {
+        if host.is_closed() {
+            return;
+        }
         let request = ureq::get(&url)
             .header("Accept", "text/event-stream")
             .header("Authorization", &opencode::basic_auth(&host.password));
@@ -245,13 +328,28 @@ fn event_loop(host: Arc<Host>, ready: Sender<()>, commands: Sender<String>) {
     host.shutdown();
 }
 
+/// Whether the agent has given up on the command currently executing. Polled
+/// inside `evaluate`/`wait` so a hung page doesn't block the queue for the full
+/// timeout. `browser_window` takes this as a closure rather than importing
+/// `Host` (which would be circular).
+fn cancel_poll(host: Arc<Host>) -> impl Fn() -> bool {
+    move || host.cancel.load(Ordering::SeqCst) || host.is_closed()
+}
+
 fn command_worker(host: Arc<Host>, commands: Receiver<String>) {
     for request_id in commands {
+        // A cancel that arrived while the previous command was running (or
+        // before this one started) must not leak into this request.
+        host.cancel.store(false, Ordering::SeqCst);
         handle_command(&host, &request_id);
+        host.cancel.store(false, Ordering::SeqCst);
     }
 }
 
 fn handle_event(host: &Host, event: &Value, commands: &Sender<String>) {
+    if host.is_closed() {
+        return;
+    }
     if event.get("type").and_then(Value::as_str) != Some("rpc.experimental.browser.control") {
         return;
     }
@@ -272,12 +370,23 @@ fn handle_event(host: &Host, event: &Value, commands: &Sender<String>) {
                 let _ = commands.send(request_id.to_string());
             }
         }
-        Some("cancel") => {}
+        Some("cancel") => {
+            // The command worker is single-threaded, so the cancel can only
+            // meaningfully target the request it's currently running; the
+            // worker clears the flag before and after each request.
+            if let Some(request_id) = data.get("requestID").and_then(Value::as_str) {
+                tracing::debug!(
+                    "browser_host: {} cancel requested for {request_id}",
+                    host.id
+                );
+            }
+            host.cancel.store(true, Ordering::SeqCst);
+        }
         _ => {}
     }
 }
 
-fn handle_command(host: &Host, request_id: &str) {
+fn handle_command(host: &Arc<Host>, request_id: &str) {
     let command = match opencode::browser_rpc(
         &host.base_url,
         &host.password,
@@ -354,7 +463,7 @@ impl Executed {
     }
 }
 
-fn execute(host: &Host, action: &Value, files: &[Value]) -> Result<Executed, BrowserError> {
+fn execute(host: &Arc<Host>, action: &Value, files: &[Value]) -> Result<Executed, BrowserError> {
     let kind = action.get("type").and_then(Value::as_str).unwrap_or("");
 
     match kind {
@@ -405,7 +514,11 @@ fn execute(host: &Host, action: &Value, files: &[Value]) -> Result<Executed, Bro
         "wait" => {
             frame_supported(action)?;
             let tab_id = tab_id(action)?;
-            Ok(Executed::value(host.window.wait(&tab_id, action)?))
+            Ok(Executed::value(host.window.wait(
+                &tab_id,
+                action,
+                &cancel_poll(host.clone()),
+            )?))
         }
         "snapshot" => {
             frame_supported(action)?;
@@ -450,7 +563,9 @@ fn execute(host: &Host, action: &Value, files: &[Value]) -> Result<Executed, Bro
             let tab_id = tab_id(action)?;
             let script = action.get("script").and_then(Value::as_str).unwrap_or("");
             let reference = action.get("ref").and_then(Value::as_str);
-            let value = host.window.evaluate(&tab_id, script, reference)?;
+            let value =
+                host.window
+                    .evaluate(&tab_id, script, reference, &cancel_poll(host.clone()))?;
             let tab = host.window.tab_json(&tab_id).ok_or_else(tab_unavailable)?;
             Ok(Executed::value(json!({ "tab": tab, "value": value })))
         }
@@ -745,10 +860,22 @@ fn send_result(host: &Host, request_id: &str, outcome: Value) {
 // granted to `corral-browser-chrome-*` webviews in
 // `capabilities/browser.json`; page webviews get no capability at all.
 
+/// Message shown when a `browser_*` UI command arrives for a session with no
+/// live host. Distinct from `tab_unavailable`'s "no such tab" on purpose: this
+/// one means the tools aren't wired up at all (plugin never attached, the
+/// session stopped, or `browser_enabled` is off), and no amount of calling
+/// `browser.tabs.list` will help.
+fn no_host(session: &str) -> String {
+    format!(
+        "corral's browser tools are not available for session {session}. Either the session is \
+         not running an OpenCode v2 agent with corral's browser host attached, the \
+         `browser_enabled` setting is off, or the host is still starting — tell the user rather \
+         than retrying."
+    )
+}
+
 fn host_for(state: &BrowserHosts, session: &str) -> Result<Arc<Host>, String> {
-    state
-        .get(session)
-        .ok_or_else(|| format!("no browser host for session {session}"))
+    state.get(session).ok_or_else(|| no_host(session))
 }
 
 fn bounds(x: f64, y: f64, width: f64, height: f64) -> browser_window::Bounds {
@@ -903,6 +1030,17 @@ pub fn browser_reload(
     Ok(tab)
 }
 
+/// Refresh the tab strip's titles from each page's current `document.title`.
+/// Called by the chrome page on a slow timer — see
+/// [`browser_window::BrowserWindow::refresh_titles`] for why this is
+/// frontend-driven.
+#[tauri::command]
+pub fn browser_refresh_titles(state: State<BrowserHosts>, session: String) -> Result<(), String> {
+    let host = host_for(state.inner(), &session)?;
+    host.window.refresh_titles();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -926,5 +1064,46 @@ mod tests {
         assert!(resolve_preview_path(root, "../outside.png").is_none());
         assert!(resolve_preview_path(root, "a/../../outside.png").is_none());
         assert!(resolve_preview_path(root, "").is_none());
+    }
+
+    /// `Host::shutdown` only removes itself from the registry when the entry
+    /// under its key is still the same host — a restarted session inserts its
+    /// replacement *before* the old host tears down, and the old one must not
+    /// evict it. `Host` needs an `AppHandle` to construct, so this pins the map
+    /// semantics the identity check relies on rather than the host itself.
+    #[test]
+    fn registry_keeps_a_replacement_inserted_before_the_old_host_removes_itself() {
+        // Same insert/get/conditional-remove shape as `BrowserHosts`, over
+        // plain pointers so no webview is needed.
+        let old = Arc::new(7u32);
+        let replacement = Arc::new(9u32);
+        let mut map: HashMap<String, Arc<u32>> = HashMap::new();
+        map.insert("proj/feat".into(), old.clone());
+        let evicted = map.insert("proj/feat".into(), replacement.clone());
+
+        assert!(Arc::ptr_eq(&evicted.unwrap(), &old));
+        let current = map.get("proj/feat").unwrap().clone();
+        assert!(Arc::ptr_eq(&current, &replacement));
+
+        // The old host's conditional remove must be a no-op now.
+        if map
+            .get("proj/feat")
+            .is_some_and(|entry| std::ptr::eq(entry.as_ref(), old.as_ref()))
+        {
+            map.remove("proj/feat");
+        }
+        assert!(map.contains_key("proj/feat"));
+
+        // ...but it must remove the entry when it is still the current one.
+        let solo = Arc::new(1u32);
+        let mut map: HashMap<String, Arc<u32>> = HashMap::new();
+        map.insert("a/b".into(), solo.clone());
+        if map
+            .get("a/b")
+            .is_some_and(|entry| std::ptr::eq(entry.as_ref(), solo.as_ref()))
+        {
+            map.remove("a/b");
+        }
+        assert!(map.is_empty());
     }
 }

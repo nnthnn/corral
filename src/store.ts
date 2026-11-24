@@ -43,6 +43,7 @@ export const DEFAULT_SETTINGS: Settings = {
   opencode_executable_path: "",
   opencode2_executable_path: "",
   pi_executable_path: "",
+  browser_enabled: true,
 };
 
 export type TabId = "agent" | "run" | "setup" | "pr" | "diff" | "file";

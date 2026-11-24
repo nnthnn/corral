@@ -294,7 +294,40 @@ describe("PrPane", () => {
     expect(
       screen.getByRole("button", { name: "Approvals" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("1 review")).toBeInTheDocument();
+    expect(screen.getByText("Not required · 1 review")).toBeInTheDocument();
+  });
+
+  it("folds one reviewer's repeated reviews by login, ignoring case", () => {
+    useStore.setState({
+      prDetailsByWtId: new Map([
+        [
+          "corral/hulling",
+          {
+            ...details,
+            review_decision: "",
+            reviews: [
+              {
+                author: "alice",
+                state: "CHANGES_REQUESTED",
+                submitted_at: "2026-07-15T01:00:00Z",
+              },
+              // GitHub can report the same account with a different casing
+              // across submissions; this must replace the row, not add one.
+              {
+                author: "Alice",
+                state: "APPROVED",
+                submitted_at: "2026-07-15T02:00:00Z",
+              },
+            ],
+          },
+        ],
+      ]),
+    });
+    render(<PrPane wt={wt} />);
+    fireEvent.click(screen.getByRole("button", { name: "Approvals" }));
+    expect(screen.getAllByText(/alice/i)).toHaveLength(1);
+    expect(screen.getByText("Approved")).toBeInTheDocument();
+    expect(screen.queryByText("Changes requested")).not.toBeInTheDocument();
   });
 
   it("calls addCommentsToChat for a single comment's Add to chat", () => {

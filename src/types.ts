@@ -224,6 +224,9 @@ export interface Settings {
   /** Path or command name used to spawn Pi sessions when `harness === "pi"`.
    * Empty = default (`pi`, resolved via PATH). */
   pi_executable_path: string;
+  /** Attach corral's embedded browser host to OpenCode v2 sessions, which is
+   * what enables OpenCode's `browser.*` tools. On by default. */
+  browser_enabled: boolean;
 }
 
 export interface ProjectSettings {

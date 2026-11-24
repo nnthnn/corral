@@ -411,10 +411,11 @@ export function PrPane({
   const comments = details?.comments ?? [];
   // Reviews arrive oldest-first, so writing in order leaves each reviewer's
   // latest state in the map — GitHub shows one row per reviewer, not one per
-  // review submission.
+  // review submission. Keyed by lowercased login: GitHub can report the same
+  // account with different casing across review submissions.
   const reviewers = new Map<string, PrReview>();
   for (const review of details?.reviews ?? []) {
-    reviewers.set(review.author, review);
+    reviewers.set(review.author.toLowerCase(), review);
   }
   const reviewDecision = details?.review_decision ?? "";
   const approved = reviewDecision === "APPROVED";
@@ -483,7 +484,9 @@ export function PrPane({
       : approvalRequired
         ? "Review required"
         : reviewers.size > 0
-          ? `${reviewers.size} review${reviewers.size === 1 ? "" : "s"}`
+          ? // Keep the policy line: a repo with no review requirement still
+            // reads "Not required", with the review count alongside it.
+            `Not required · ${reviewers.size} review${reviewers.size === 1 ? "" : "s"}`
           : "Not required";
   const approvalPct =
     approved || changesRequested || reviewers.size > 0 ? 100 : 0;

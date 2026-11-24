@@ -112,6 +112,37 @@ describe("SettingsPanel", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("toggles the embedded browser setting only for the opencode2 harness", async () => {
+    useStore.setState((s) => ({
+      settingsOpen: true,
+      settings: { ...s.settings, harness: "opencode2" },
+    }));
+    mockInvoke({ save_settings: async () => undefined });
+    render(<SettingsPanel />);
+
+    const toggle = screen.getByRole("checkbox", {
+      name: /embedded browser/i,
+    });
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await vi.waitFor(() =>
+      expect(useStore.getState().settings.browser_enabled).toBe(false),
+    );
+  });
+
+  it("hides the embedded browser setting under other harnesses", () => {
+    useStore.setState((s) => ({
+      settingsOpen: true,
+      settings: { ...s.settings, harness: "claude" },
+    }));
+    render(<SettingsPanel />);
+    expect(
+      screen.queryByRole("checkbox", { name: /embedded browser/i }),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows the Pi executable field while the pi harness is selected", () => {
     useStore.setState((s) => ({
       settingsOpen: true,

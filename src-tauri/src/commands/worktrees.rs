@@ -173,6 +173,7 @@ pub async fn create_worktree(
 /// directory disappears out from under it.
 #[tauri::command]
 pub async fn remove_worktree(
+    app: tauri::AppHandle,
     session_registry: tauri::State<'_, crate::commands::session::SessionRegistry>,
     provision_registry: tauri::State<'_, crate::commands::provision::Registry>,
     run_registry: tauri::State<'_, crate::commands::run::Registry>,
@@ -181,7 +182,7 @@ pub async fn remove_worktree(
     delete_branch: bool,
 ) -> Result<(), String> {
     let key = corral_core::agent_session::key(&project, &feature);
-    crate::commands::session::kill_session_best_effort(&session_registry, &key);
+    crate::commands::session::kill_session_best_effort(&app, &session_registry, &key);
     crate::commands::provision::stop_and_remove(&provision_registry, &key);
     crate::commands::run::stop_and_remove(&run_registry, &key);
 
