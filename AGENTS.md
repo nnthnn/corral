@@ -437,6 +437,13 @@ See `IDEAS.md` for the backlog. As of the latest work, implemented:
   provisioning rules (files to copy, one-shot setup command run via the
   Provision panel/tab), and a git/file-system watcher so external changes
   (e.g. a `corral rename` run from inside an agent's own PTY) show up live.
+- **Project creation** (GUI + CLI): "New project" creates a folder, `git init`s
+  it with one empty commit, registers it, and opens its first worktree — so the
+  agent does all the scaffolding in a normal branch/worktree and every git
+  feature (diff, merge, PR) works from the first session. `Add project` also
+  accepts an empty folder and initializes it the same way. An optional
+  "what are you building?" brief is pasted (not submitted) into the first
+  agent's input.
 - **Agent sessions**: a harness CLI in a PTY per worktree — Claude Code,
   OpenCode (v2 current, v1 legacy), or Pi, chosen via the harness setting —
   streamed to an embedded xterm.js terminal (GPU-rendered via

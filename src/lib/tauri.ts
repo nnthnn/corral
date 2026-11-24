@@ -191,6 +191,7 @@ interface CommandMap {
   list_projects: { args: undefined; result: string[] };
   project_icon: { args: { project: string }; result: string | null };
   add_project: { args: { path: string }; result: string };
+  create_project: { args: { parent: string; name: string }; result: string };
   remove_project: { args: { project: string }; result: undefined };
 }
 

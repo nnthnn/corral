@@ -179,6 +179,9 @@ export class SessionManager {
   /** Sessions that have already surfaced their opencode2 hint — dedupes the
    * toast when a streaming error repeats. */
   private hintedSessions = new Set<string>();
+  /** Text queued by `prefillWhenReady`, per session id, waiting for that
+   * session's first output (see the method's doc comment). */
+  private pendingPrefills = new Map<string, string>();
 
   constructor(opts: {
     /** The `#terminals` element React mounts and owns; SessionManager
@@ -247,6 +250,10 @@ export class SessionManager {
         entry.term.options.cursorInactiveStyle = "outline";
       }
       this.checkOpencode2Hint(e.payload.id, bytes);
+      // First output also means the agent's own input loop is live, so a
+      // queued scaffold brief can be pasted now without landing in a tty
+      // that's still in canonical mode (see `prefillWhenReady`).
+      this.flushPrefill(e.payload.id);
       // See `TermEntry.resizeReannounced`'s doc comment: re-send the size
       // once real output proves the child's own event loop is alive, to
       // close the race where its very first size read landed before our
@@ -278,6 +285,9 @@ export class SessionManager {
             : "[agent exited]";
         entry.term.write(`\r\n\x1b[90m${msg}\x1b[0m\r\n`);
         this.clearRestartOverlay(e.payload.id);
+        // Never replay a queued scaffold brief into a later (resumed) session
+        // for the same id — the text belonged to this one.
+        this.pendingPrefills.delete(e.payload.id);
         // The PTY is gone, so nothing can be typed into it anymore: stop the
         // cursor blinking (and hide it entirely while the pane isn't focused)
         // so a dead terminal doesn't keep looking like it's waiting for
@@ -464,6 +474,7 @@ export class SessionManager {
     // hint forever and `hintBuffers` would just leak.
     this.hintBuffers.delete(id);
     this.hintedSessions.delete(id);
+    this.pendingPrefills.delete(id);
     const entry = this.entries.get(id);
     if (!entry) return;
     entry.term.dispose();
@@ -539,6 +550,42 @@ export class SessionManager {
     } catch {
       return false;
     }
+  }
+
+  /** Queue `text` to be pasted into session `id`'s terminal input — without
+   * submitting it — once that session is ready for input. Used to seed a new
+   * project's scaffold brief: it's pasted once output proves the agent's own
+   * input loop is live, so the paste can't land while the tty is still in
+   * canonical mode (where it would be echoed and held as a line rather than
+   * reaching the TUI). The user reviews the text and presses Enter.
+   *
+   * The queue is self-healing: besides the first-output flush, a prefill
+   * queued *after* this session's terminal has already attached and flushed
+   * is released on the next `show()`. That covers the real startup race —
+   * `createWorktree` fire-and-forgets `startAgent`, so `attach_session` (and
+   * its one-shot flush) can complete before the caller gets here, and the
+   * agent may never emit another chunk soon enough to flush it. */
+  prefillWhenReady(id: string, text: string): void {
+    if (!text) return;
+    this.pendingPrefills.set(id, text);
+    // Attached already? Release on the next tick rather than waiting on output
+    // that may not come. `flushPrefill` needs an entry, so hide-and-show or an
+    // already-visible terminal both qualify; if neither, the normal
+    // first-output path will handle it when the session actually starts.
+    if (this.entries.has(id)) this.flushPrefill(id);
+  }
+
+  /** Paste a queued [`prefillWhenReady`] text once `id`'s terminal exists. */
+  private flushPrefill(id: string): void {
+    const text = this.pendingPrefills.get(id);
+    if (!text) return;
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    this.pendingPrefills.delete(id);
+    // `paste` goes through xterm's bracketed-paste path, which is exactly the
+    // Ctrl+V semantics the user would use — so a multi-line brief can't submit
+    // itself halfway through.
+    entry.term.paste(text);
   }
 
   /** Remove the inline "Restart" button for `id`, if one is showing. */
@@ -656,7 +703,14 @@ export class SessionManager {
 
     try {
       const attach = await invoke("attach_session", { id });
-      if (attach.buffer.length) term.write(new Uint8Array(attach.buffer));
+      // A session that already produced output before this terminal mounted
+      // (attach_session's scrollback) may never fire another event soon, so
+      // release any queued scaffold brief here too — but only then: an empty
+      // buffer says nothing about the child being ready to read input.
+      if (attach.buffer.length) {
+        term.write(new Uint8Array(attach.buffer));
+        this.flushPrefill(id);
+      }
     } catch (err) {
       term.write(`\x1b[31mfailed to attach: ${err}\x1b[0m\r\n`);
     }

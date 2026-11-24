@@ -28,3 +28,10 @@ export async function addProject(): Promise<void> {
 export function openRemoveProjectDialog(project: string): void {
   useStore.setState({ removeProjectTarget: project });
 }
+
+/** Opens the "new project" dialog — create a folder + fresh git repo, then
+ * its first worktree. Distinct from `addProject`, which registers a repo that
+ * already exists on disk (or an empty folder). */
+export function openNewProjectDialog(): void {
+  useStore.setState({ newProjectOpen: true });
+}

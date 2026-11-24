@@ -17,23 +17,54 @@ pub fn project_icon(project: String) -> Option<String> {
     project::find_icon(&project)
 }
 
-/// Register the git repo at `path` (an absolute directory, e.g. from the
+/// Create and register a brand-new project: a directory at `parent/name`
+/// (`parent` defaults to `~/source` when blank) initialized as a git repo with
+/// one empty commit, so corral can create its first worktree immediately.
+/// Returns the project name. The empty commit is what makes the very first
+/// worktree possible — `git worktree add` needs a commit to branch from — while
+/// leaving all actual scaffolding to the agent that runs there.
+#[tauri::command]
+pub fn create_project(parent: String, name: String) -> Result<String, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("project name can't be empty".to_string());
+    }
+    match corral_core::project_create::create(&name, &parent) {
+        Ok(_) => Ok(name),
+        Err(corral_core::Error::ProjectDirNotEmpty(dir)) => Err(format!(
+            "{} already exists and isn't empty — pick a different name or location, or use Add project to register it",
+            dir.display()
+        )),
+        // `create` validates names in `project_create`; give the dialog the
+        // same actionable copy the non-empty case gets instead of the bare
+        // "invalid name: ..." Display string.
+        Err(corral_core::Error::InvalidName(_)) => Err(
+            "that name can't be used as a folder name — use a single path segment (no slashes, no surrounding spaces)"
+                .to_string(),
+        ),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Register the directory at `path` (an absolute directory, e.g. from the
 /// GUI's native folder picker) as a project corral tracks, deriving its name
-/// from the directory's basename. Errors if `path` isn't a git repo, or if a
-/// project with that name is already registered. Returns the derived name.
+/// from the directory's basename. A directory that already has `.git` is
+/// registered as-is; an empty one is initialized as a fresh repo (same as
+/// `create_project`) — there's nothing to import, so that's just a new project
+/// whose scaffolding hasn't happened yet. A non-empty non-repo directory is
+/// rejected. Errors if a project with that name is already registered.
+/// Returns the derived name.
 #[tauri::command]
 pub fn add_project(path: String) -> Result<String, String> {
     let canonical = std::fs::canonicalize(&path).map_err(|e| format!("{path}: {e}"))?;
-    if !canonical.join(".git").exists() {
-        return Err(format!("{} is not a git repository", canonical.display()));
+    match corral_core::project_create::register_existing(&canonical) {
+        Ok(name) => Ok(name),
+        Err(corral_core::Error::ProjectDirNotEmpty(dir)) => Err(format!(
+            "{} isn't a git repository and isn't empty — pick an existing repo, or an empty folder to start a new project",
+            dir.display()
+        )),
+        Err(e) => Err(e.to_string()),
     }
-    let name = canonical
-        .file_name()
-        .ok_or_else(|| format!("{} has no directory name", canonical.display()))?
-        .to_string_lossy()
-        .into_owned();
-    corral_core::project_settings::register(&name, canonical).str_err()?;
-    Ok(name)
 }
 
 /// Remove `project` from corral entirely: stops any running session,

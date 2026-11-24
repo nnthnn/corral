@@ -38,6 +38,9 @@ pub enum Error {
     #[error("project not registered: {0:?} — add it first")]
     ProjectNotRegistered(String),
 
+    #[error("project directory is not empty: {0}")]
+    ProjectDirNotEmpty(PathBuf),
+
     #[error("ambiguous feature {feature:?}; matches projects: {projects}")]
     AmbiguousFeature { feature: String, projects: String },
 

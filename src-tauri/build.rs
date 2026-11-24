@@ -9,6 +9,7 @@ fn main() {
             "list_projects",
             "project_icon",
             "add_project",
+            "create_project",
             "remove_project",
             "list_worktrees",
             "set_worktree_note",

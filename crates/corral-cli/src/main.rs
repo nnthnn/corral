@@ -138,10 +138,23 @@ enum ConfigAction {
 
 #[derive(Subcommand)]
 enum ProjectAction {
-    /// Register the git repo at `path`, deriving its name from the
-    /// directory's basename. Errors if `path` isn't a git repo or a
-    /// project with that name is already registered.
+    /// Register the directory at `path`, deriving its name from the
+    /// directory's basename. An existing git repo is registered as-is; an
+    /// empty directory is initialized as a fresh repo (main + one empty
+    /// commit). Errors if `path` is neither, or a project with that name is
+    /// already registered.
     Add { path: String },
+    /// Start a brand-new project: creates `<parent>/<name>` (default parent:
+    /// `~/source`), initializes it as a git repo with one empty commit, and
+    /// registers it. Run `corral new <name>` afterward to create its first
+    /// worktree.
+    New {
+        /// Project (and directory) name. Must be a single path segment.
+        name: String,
+        /// Directory to create the project in. Defaults to `~/source`.
+        #[arg(long)]
+        parent: Option<String>,
+    },
 }
 
 #[derive(Clone, clap::ValueEnum)]
@@ -374,17 +387,16 @@ fn cmd_project(action: ProjectAction) -> Result<()> {
         ProjectAction::Add { path } => {
             let canonical =
                 std::fs::canonicalize(&path).with_context(|| format!("resolving {path}"))?;
-            if !canonical.join(".git").exists() {
-                anyhow::bail!("{} is not a git repository", canonical.display());
-            }
-            let name = canonical
-                .file_name()
-                .with_context(|| format!("{} has no directory name", canonical.display()))?
-                .to_string_lossy()
-                .into_owned();
-            corral_core::project_settings::register(&name, canonical.clone())
-                .with_context(|| format!("registering project {name}"))?;
+            let name = corral_core::project_create::register_existing(&canonical)
+                .with_context(|| format!("registering {}", canonical.display()))?;
             println!("registered {name} -> {}", canonical.display());
+            Ok(())
+        }
+        ProjectAction::New { name, parent } => {
+            let path = corral_core::project_create::create(&name, parent.as_deref().unwrap_or(""))
+                .with_context(|| format!("creating project {name}"))?;
+            println!("created {name} -> {}", path.display());
+            println!("next: corral new {name}");
             Ok(())
         }
     }

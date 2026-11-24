@@ -3,6 +3,7 @@ import { ChangesPane } from "./components/ChangesPane";
 import { CommandPalette } from "./components/CommandPalette";
 import { DeleteDialog } from "./components/DeleteDialog";
 import { MainPane } from "./components/MainPane";
+import { NewProjectDialog } from "./components/NewProjectDialog";
 import { ProjectSettingsDialog } from "./components/ProjectSettingsDialog";
 import { RemoveProjectDialog } from "./components/RemoveProjectDialog";
 import { RenameDialog } from "./components/RenameDialog";
@@ -94,6 +95,7 @@ export function App() {
       <DeleteDialog />
       <ProjectSettingsDialog />
       <RemoveProjectDialog />
+      <NewProjectDialog />
       <CommandPalette />
       <ToastHost />
       <WindowControls />

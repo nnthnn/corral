@@ -115,6 +115,7 @@ pub fn run() {
             commands::projects::list_projects,
             commands::projects::project_icon,
             commands::projects::add_project,
+            commands::projects::create_project,
             commands::projects::remove_project,
             commands::worktrees::list_worktrees,
             commands::worktrees::set_worktree_note,
