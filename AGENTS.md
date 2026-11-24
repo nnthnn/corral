@@ -194,22 +194,45 @@ git push origin HEAD
 git push origin vX.Y.Z   # pushes the tag, which triggers the Release workflow
 ```
 
-The `.github/workflows/release.yml` workflow runs on `v*` tag pushes and builds
-two platforms in parallel, then publishes every artifact in one GitHub Release:
+The `.github/workflows/release.yml` workflow runs on `v*` tag pushes, builds
+the Linux bundles, and publishes them in one GitHub Release:
 
 - **Linux** (`ubuntu-latest`): `.deb` / `.rpm` / `.AppImage`.
-- **macOS** (`macos-14`): a universal (arm64 + x86_64) `.dmg`, built with
-  `pnpm tauri build --target universal-apple-darwin`.
 
-Each job re-verifies the tag matches the Cargo.toml version. macOS signing +
-notarization is opt-in via repository secrets (`APPLE_CERTIFICATE`,
-`APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
-`APPLE_PASSWORD`, `APPLE_TEAM_ID`); with none configured the dmg is unsigned
-and needs Gatekeeper's right-click → Open on first launch. Use `--no-commit` /
-`--no-tag` on the script to stop short (e.g. `just bump patch --no-tag`).
+The tag is re-verified against the Cargo.toml version before bundling. Use
+`--no-commit` / `--no-tag` on the script to stop short (e.g.
+`just bump patch --no-tag`).
 
-`ci.yml` also has a `macos-check` job that runs `cargo check` on macOS, purely
-so `cfg(target_os = "macos")` code gets compiled before a release.
+**macOS is built by hand, not in the release workflow.** macOS runners are the
+one standard runner GitHub does *not* make free on a public repo (a 10×
+multiplier against an included allowance a GitHub Free user account doesn't
+have), so a `macos-14` job dies at scheduling with zero steps run — which
+takes the whole run down to `cancelled` and stops Linux publishing, since
+`publish` needs it. There is no free tier to wait for. To ship a `.dmg`:
+
+```fish
+# On a Mac, from the tagged checkout:
+pnpm install
+just bundle                      # or: pnpm tauri build --target universal-apple-darwin
+gh release upload vX.Y.Z \
+    target/universal-apple-darwin/release/bundle/dmg/*.dmg
+```
+
+Alternatively, run the Release workflow by hand with `build_macos` ticked
+(Actions → Release → Run workflow) and attach the resulting
+`macos-bundles` artifact to the release. That job is `continue-on-error` and
+opt-in, so it can never block or cancel a Linux release.
+
+macOS signing + notarization is still opt-in via repository secrets
+(`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`,
+`APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`); with none configured the dmg is
+unsigned and needs Gatekeeper's right-click → Open on first launch.
+
+There is deliberately **no macOS job in `ci.yml`**: it would never run, and a
+green check that silently means "macOS was never compiled" is worse than none.
+`cfg(target_os = "macos")` code is therefore only compiled when someone builds
+on a Mac — keep that in mind when touching `process.rs`, `caffeinate.rs`, or
+`shell_env.rs`.
 
 ## Gotchas / hard-won lessons
 

@@ -1,20 +1,28 @@
 name: Release
 
-# Builds the Linux bundles (.deb / .rpm / .AppImage) and the macOS disk image
-# (.dmg), then publishes a GitHub Release whenever a vX.Y.Z tag is pushed. The
-# tag is created by scripts/bump-version.sh, so the version in Cargo.toml and
-# the tag are expected to agree — verified in each build job before spending
-# time bundling. Windows isn't built yet (see AGENTS.md).
+# Builds the Linux bundles (.deb / .rpm / .AppImage) and publishes a GitHub
+# Release whenever a vX.Y.Z tag is pushed. The tag is created by
+# scripts/bump-version.sh, so the version in Cargo.toml and the tag are
+# expected to agree — verified in each job before spending time bundling.
 #
-# Also runnable by hand (Actions → Release → Run workflow), which builds BOTH
-# platforms and publishes nothing. That's the dry run for a release: it
-# exercises the parts a tag push can't rehearse — notably the macOS
-# universal-binary cross-compile and .dmg packaging, which `ci.yml`'s
-# `cargo check` doesn't touch. Artifacts land in the run's Artifacts section.
+# macOS is deliberately NOT part of the default build. macOS runners are the
+# one standard runner GitHub doesn't make free on a public repo, so shipping a
+# `macos-14` job in the tag path means the release either costs money every
+# time or silently fails; see README's "Releasing" note for the manual .dmg
+# path (build via `just bundle` on a Mac, or run this workflow by hand with
+# `build_macos` ticked, then attach the artifact to the release).
+#
+# Manual runs (Actions → Release → Run workflow) build for inspection and
+# never publish.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      build_macos:
+        description: "Also build the macOS .dmg (spends paid macOS-runner minutes)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write # softprops/action-gh-release needs this to create the release
@@ -119,6 +127,19 @@ jobs:
 
   macos:
     needs: prepare
+    # Opt-in, not part of the default release path: macOS runners are the one
+    # standard runner GitHub does NOT make free on a public repo (10x multiplier
+    # against an included allowance a personal account doesn't have), so a
+    # `macos-14` job dies at scheduling with zero steps run. `workflow_dispatch`
+    # with `build_macos` ticked is the dry run that produces a .dmg to attach to
+    # a release by hand; see README's "Releasing" note.
+    #
+    # `continue-on-error` is load-bearing even when skipped: `publish` needs
+    # this job, so without it a cancel/failure here takes the whole run down to
+    # `cancelled` and Linux never publishes — which is exactly what happened
+    # the first time this workflow ran.
+    if: github.event_name == 'workflow_dispatch' && inputs.build_macos
+    continue-on-error: true
     # macOS runners are arm64; building the universal binary also needs the
     # x86_64 target installed (below), which is why this is one job rather
     # than one per architecture.
@@ -186,7 +207,10 @@ jobs:
   publish:
     # Skipped entirely on a manual run: a dry run must never create a release.
     if: needs.prepare.outputs.publish == 'true'
-    needs: [prepare, linux, macos]
+    # Deliberately does NOT need `macos`: that job is skipped on a tag push, and
+    # a skipped job in `needs:` would skip this one too. The Linux bundles are
+    # the release; a .dmg is attached by hand afterwards when there is one.
+    needs: [prepare, linux]
     runs-on: ubuntu-latest
     steps:
       # Both build jobs upload their own artifacts; merge them into one flat

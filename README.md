@@ -41,13 +41,22 @@ branch diffs](docs/assets/corral-demo.gif)
 
 ## Install
 
-Download the latest `.deb`, `.rpm`, or `.AppImage` (Linux) or the `.dmg`
-(macOS, universal binary) from the
+Download the latest `.deb`, `.rpm`, or `.AppImage` (Linux) from the
 [Releases](https://github.com/nnthnn/corral/releases) page.
 
-macOS builds are currently unsigned unless the release was built with signing
-secrets configured, so the first launch may need **right-click → Open** to get
-past Gatekeeper.
+macOS builds (`.dmg`, universal binary) are attached by hand when there is one
+— they aren't produced by the release workflow, because macOS CI runners are
+the one standard runner GitHub doesn't make free on a public repo. Those builds
+are unsigned unless signed with the relevant secrets, so the first launch may
+need **right-click → Open** to get past Gatekeeper.
+
+Build one yourself from a checkout on a Mac:
+
+```sh
+pnpm install
+pnpm tauri build --target universal-apple-darwin
+# target/universal-apple-darwin/release/bundle/dmg/*.dmg
+```
 
 On macOS, corral reads your login shell's environment once at startup — the
 same way Terminal.app does — so Homebrew/nvm/pnpm binaries and anything you
