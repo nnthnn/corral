@@ -108,6 +108,7 @@ interface CommandMap {
     result: undefined;
   };
   get_settings: { args: undefined; result: Settings };
+  list_monospace_fonts: { args: undefined; result: string[] };
   save_settings: { args: { settings: Settings }; result: undefined };
   get_project_settings: {
     args: { project: string };

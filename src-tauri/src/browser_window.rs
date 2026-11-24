@@ -28,6 +28,20 @@ use uuid::Uuid;
 const AGENT_JS: &str = include_str!("browser_agent.js");
 const MIN_WIDTH: f64 = 320.0;
 const MIN_HEIGHT: f64 = 200.0;
+/// Largest full-document height a `fullPage` screenshot will render. The
+/// snapshot is encoded on the GTK main loop, so this bounds how long one
+/// screenshot can freeze the app (~20k px is already ~80 MB of RGBA at 2x).
+const MAX_FULL_PAGE_HEIGHT: f64 = 20_000.0;
+
+/// Shared tail for the "the page made us wait" failures. A timeout is almost
+/// always a modal dialog, a click-gated element, or a promise that never
+/// resolves, and the agent can't see the page — so spell out the recovery
+/// instead of leaving it to guess. Kept in sync with
+/// `onboarding::BROWSER_INSTRUCTIONS`, which quotes the same guidance.
+const BLOCKED_HINT: &str = "The page is probably blocked on a modal/confirm dialog, an \
+     element that only appears after a click, or a promise that never resolves. Call \
+     browser.snapshot (or browser.dialog) to see what is actually on screen, then act on \
+     the returned refs; don't just retry the same call.";
 
 /// A failed browser operation: `(code, message)`, mapped to the RPC failure
 /// shape by the command layer.
@@ -262,6 +276,33 @@ impl BrowserWindow {
         self.emit_state();
     }
 
+    /// Re-read every page's `document.title` and update the tab strip.
+    /// Frontend-driven (the chrome page calls `browser_refresh_titles` on a
+    /// slow timer) rather than a backend thread: `document.title` changes
+    /// without a navigation in every single-page app, but the webview can only
+    /// be asked from the main thread — so there's no cheaper place to do this
+    /// than a call the page already makes to update its own state. Silently
+    /// skips tabs whose document hasn't run the agent yet (mid-navigation).
+    pub fn refresh_titles(self: &Arc<Self>) {
+        let tabs: Vec<(String, Webview)> = {
+            let state = self.state();
+            state
+                .tabs
+                .iter()
+                .map(|tab| (tab.id.clone(), tab.webview.clone()))
+                .collect()
+        };
+        for (tab_id, webview) in tabs {
+            let weak = Arc::downgrade(self);
+            let _ = webview.eval_with_callback("document.title", move |raw| {
+                if let Some(window) = weak.upgrade() {
+                    let title = serde_json::from_str::<String>(&raw).unwrap_or(raw);
+                    window.set_title(&tab_id, &title);
+                }
+            });
+        }
+    }
+
     pub fn set_bounds(&self, bounds: Bounds) {
         {
             let mut state = self.state();
@@ -479,19 +520,23 @@ impl BrowserWindow {
     }
 
     fn webview(&self, tab_id: &str) -> Result<Webview, BrowserError> {
-        self.ensure_current_window();
-        self.state()
+        let window_alive = self.ensure_current_window();
+        let state = self.state();
+        let tab = state
             .tabs
             .iter()
             .find(|tab| tab.id == tab_id)
-            .map(|tab| tab.webview.clone())
-            .ok_or_else(tab_unavailable)
+            .map(|tab| tab.webview.clone());
+        if tab.is_none() && !window_alive {
+            return Err(window_closed());
+        }
+        tab.ok_or_else(tab_unavailable)
     }
 
     fn handle_page_load(
         self: &Arc<Self>,
         tab_id: &str,
-        webview: &Webview,
+        _webview: &Webview,
         payload: &tauri::webview::PageLoadPayload<'_>,
     ) {
         let finished = payload.event() == PageLoadEvent::Finished;
@@ -517,16 +562,10 @@ impl BrowserWindow {
             }
         }
         self.emit_state();
-        if finished {
-            let weak = Arc::downgrade(self);
-            let page_tab_id = tab_id.to_string();
-            let _ = webview.eval_with_callback("document.title", move |raw| {
-                if let Some(window) = weak.upgrade() {
-                    let title = serde_json::from_str::<String>(&raw).unwrap_or(raw);
-                    window.set_title(&page_tab_id, &title);
-                }
-            });
-        }
+        // `document.title` is read by the poller below, not here: a
+        // single-page app sets its title *after* the load finishes (on route
+        // change, after a fetch, ...), so reading it once at `Finished` left
+        // the tab strip showing a stale title until the next navigation.
     }
 
     fn set_title(&self, tab_id: &str, title: &str) {
@@ -585,6 +624,7 @@ impl BrowserWindow {
         tab_id: &str,
         script: &str,
         element_ref: Option<&str>,
+        cancelled: &dyn Fn() -> bool,
     ) -> Result<Value, BrowserError> {
         let webview = self.webview(tab_id)?;
         let id = Uuid::new_v4().to_string();
@@ -604,6 +644,12 @@ impl BrowserWindow {
         webview.eval(start).map_err(js_error)?;
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
+            if cancelled() {
+                return Err(js_error_str(
+                    "browser evaluate was cancelled. Check the page state with \
+                     browser.snapshot before retrying.",
+                ));
+            }
             let poll = format!("JSON.stringify(window.__corral._poll({id_literal}))");
             let polled = eval_json(&webview, poll, Duration::from_secs(5))?;
             if polled.get("done").and_then(Value::as_bool) == Some(true) {
@@ -619,13 +665,20 @@ impl BrowserWindow {
                 ));
             }
             if Instant::now() > deadline {
-                return Err(js_error_str("browser evaluate timed out"));
+                return Err(js_error_str(format!(
+                    "browser evaluate timed out after 30s. {BLOCKED_HINT}"
+                )));
             }
             std::thread::sleep(Duration::from_millis(50));
         }
     }
 
-    pub fn wait(&self, tab_id: &str, action: &Value) -> Result<Value, BrowserError> {
+    pub fn wait(
+        &self,
+        tab_id: &str,
+        action: &Value,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Value, BrowserError> {
         let condition = action
             .get("condition")
             .and_then(Value::as_str)
@@ -638,6 +691,12 @@ impl BrowserWindow {
             .clamp(1, 30_000);
         let deadline = Instant::now() + Duration::from_millis(timeout);
         loop {
+            if cancelled() {
+                return Err(js_error_str(
+                    "browser wait was cancelled. Check the page state with browser.snapshot \
+                     before retrying.",
+                ));
+            }
             // During a navigation the new document may not have run the
             // agent script yet; treat that as "not ready" and keep polling.
             let ready = self
@@ -655,7 +714,15 @@ impl BrowserWindow {
             if Instant::now() > deadline {
                 return Err((
                     "unsupported".to_string(),
-                    format!("browser.wait timed out after {timeout} ms"),
+                    format!(
+                        "browser.wait timed out after {timeout} ms waiting for \
+                         `{condition}`{}. {BLOCKED_HINT}",
+                        if text.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" (text {text:?})")
+                        }
+                    ),
                 ));
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -678,6 +745,12 @@ impl BrowserWindow {
             .and_then(Value::as_bool)
             .unwrap_or(false)
             && element_ref.is_none();
+        if full_page {
+            // A full-document snapshot is rendered and PNG-encoded on the GTK
+            // main loop, so an unbounded page freezes the whole app. Ask the
+            // page how tall it is first and refuse rather than risk it.
+            self.check_full_page_size(tab_id)?;
+        }
         let max_width = action
             .get("maxWidth")
             .and_then(Value::as_u64)
@@ -698,6 +771,27 @@ impl BrowserWindow {
             "data": base64::engine::general_purpose::STANDARD.encode(&png),
         });
         Ok((json!({ "tab": tab }), vec![file]))
+    }
+
+    /// Refuse a full-page screenshot when the page is tall enough that
+    /// rendering + PNG-encoding it would stall the main loop. The page agent
+    /// reports `documentElement.scrollHeight`, which is what WebKit's
+    /// `FullDocument` snapshot region walks, so it's the right thing to bound.
+    fn check_full_page_size(&self, tab_id: &str) -> Result<(), BrowserError> {
+        let value = self.agent_call(tab_id, "documentSize", json!({}))?;
+        let height = value.get("height").and_then(Value::as_f64).unwrap_or(0.0);
+        if height > MAX_FULL_PAGE_HEIGHT {
+            return Err((
+                "unsupported".to_string(),
+                format!(
+                    "the page is {}px tall, which is too large for a full-page screenshot \
+                     (limit {MAX_FULL_PAGE_HEIGHT}px). Scroll to the part you need and take a \
+                     viewport screenshot, or pass `ref` to capture one element.",
+                    height.round()
+                ),
+            ));
+        }
+        Ok(())
     }
 
     fn element_box(
@@ -754,11 +848,26 @@ fn tab_json(tab: &Tab) -> Value {
     })
 }
 
+/// Message for a `tabID` the backend doesn't recognise — after a navigation
+/// closed the tab, or the user closed corral's browser window. Assumes a host
+/// exists (see `host_for`'s `no_host` for the "tools aren't attached" case).
 fn tab_unavailable() -> BrowserError {
     (
         "unsupported".to_string(),
         "corral does not have that browser tab. Call browser.tabs.list({}) and use an exact \
          returned tabID; tabs are closed when the user closes corral's browser window."
+            .to_string(),
+    )
+}
+
+/// Same situation as [`tab_unavailable`], but where the browser window itself
+/// is gone. Listing tabs would only return an empty list, so point at the real
+/// fix (reopen a tab) instead.
+fn window_closed() -> BrowserError {
+    (
+        "unsupported".to_string(),
+        "corral's browser window is closed, so there are no open tabs. Open one with \
+         browser.tabs.open({ url }) before using refs or tab-targeted commands."
             .to_string(),
     )
 }

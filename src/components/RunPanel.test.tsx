@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useStore } from "../store";
 import type { Worktree } from "../types";
@@ -21,6 +27,7 @@ vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     rows = 24;
     cols = 80;
+    options = { fontFamily: "", fontSize: 13 };
     loadAddon() {}
     open() {}
     write(data: Uint8Array) {
@@ -429,6 +436,39 @@ describe("RunPanel terminal refit", () => {
     vi.mocked(invoke).mockClear();
 
     triggerResize();
+
+    expect(invoke).toHaveBeenCalledWith("resize_run", {
+      key: "corral/weeding",
+      rows: 24,
+      cols: 80,
+    });
+  });
+
+  it("refits and resizes the run PTY when the terminal font changes", () => {
+    captureResizeObserver();
+    render(<RunPanel wt={wt} />);
+    const el = screen.getByTestId("run-terminal");
+    Object.defineProperty(el, "clientWidth", {
+      value: 640,
+      configurable: true,
+    });
+    Object.defineProperty(el, "clientHeight", {
+      value: 400,
+      configurable: true,
+    });
+    vi.mocked(invoke).mockClear();
+
+    // xterm re-measures and repaints itself on the option change; the panel
+    // still has to re-fit and tell the Run PTY its new rows/cols, since the
+    // ResizeObserver only fires on box-size changes.
+    act(() => {
+      useStore.setState((s) => ({
+        settings: {
+          ...s.settings,
+          terminal_font_family: "Hack Nerd Font Mono",
+        },
+      }));
+    });
 
     expect(invoke).toHaveBeenCalledWith("resize_run", {
       key: "corral/weeding",

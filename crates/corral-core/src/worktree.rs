@@ -1139,9 +1139,7 @@ mod tests {
             path: PathBuf::new(),
             copy_globs: vec!["CLAUDE.md".into()],
             setup_command: String::new(),
-            run_command: String::new(),
-            project_prompt: String::new(),
-            env: vec![],
+            ..Default::default()
         };
         let wt = create_under(
             &repo,
@@ -1171,9 +1169,7 @@ mod tests {
             path: PathBuf::new(),
             copy_globs: vec!["docs/*.md".into()],
             setup_command: String::new(),
-            run_command: String::new(),
-            project_prompt: String::new(),
-            env: vec![],
+            ..Default::default()
         };
         let wt = create_under(
             &repo,
@@ -1201,9 +1197,7 @@ mod tests {
             path: PathBuf::new(),
             copy_globs: vec!["**/*".into()],
             setup_command: String::new(),
-            run_command: String::new(),
-            project_prompt: String::new(),
-            env: vec![],
+            ..Default::default()
         };
         let wt = create_under(
             &repo,

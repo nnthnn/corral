@@ -30,7 +30,7 @@ fn projects_path() -> Result<PathBuf> {
     Ok(projects_dir()?.join(STORE_FILE))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProjectSettings {
     /// Absolute path to this project's git repo on disk. Set once when the
@@ -47,6 +47,12 @@ pub struct ProjectSettings {
     /// place for a user's own `ln -s` commands if they'd rather symlink a
     /// path than copy it.
     pub setup_command: String,
+    /// Whether [`setup_command`](Self::setup_command) is started
+    /// automatically when a worktree is created. `false` leaves the command
+    /// configured but unrun — the Setup tab's Re-run button can still start
+    /// it on demand. Defaults to `true` (the behavior from before this
+    /// setting existed), including for entries saved before it was added.
+    pub auto_setup: bool,
     /// Shell command run via `sh -c` for the Run tab (e.g. a dev server).
     /// Empty means "no saved override — auto-detect a best-effort default
     /// instead" (see `commands::run_detect` in the `corral-app` crate).
@@ -62,6 +68,20 @@ pub struct ProjectSettings {
     /// `#`-comments, and lines without a `=` are ignored at injection time
     /// (see [`ProjectSettings::env_vars`]). Empty = no extra env.
     pub env: Vec<String>,
+}
+
+impl Default for ProjectSettings {
+    fn default() -> Self {
+        Self {
+            path: PathBuf::new(),
+            copy_globs: Vec::new(),
+            setup_command: String::new(),
+            auto_setup: true,
+            run_command: String::new(),
+            project_prompt: String::new(),
+            env: Vec::new(),
+        }
+    }
 }
 
 impl ProjectSettings {
@@ -195,6 +215,21 @@ mod tests {
         assert_eq!(s.setup_command, "");
         assert_eq!(s.run_command, "");
         assert!(s.env.is_empty());
+        assert!(s.auto_setup, "setup runs automatically unless opted out");
+    }
+
+    /// Entries saved before `auto_setup` existed must keep provisioning
+    /// automatically — the field is newer than the projects.json files in
+    /// the wild, and turning it off is an explicit opt-in.
+    #[test]
+    fn auto_setup_defaults_to_true_for_entries_saved_without_it() {
+        let s: ProjectSettings =
+            serde_json::from_str(r#"{"setup_command":"pnpm install"}"#).unwrap();
+        assert!(s.auto_setup);
+        assert_eq!(s.setup_command, "pnpm install");
+
+        let s: ProjectSettings = serde_json::from_str(r#"{"auto_setup":false}"#).unwrap();
+        assert!(!s.auto_setup);
     }
 
     #[test]
@@ -223,6 +258,7 @@ mod tests {
                 path: "/home/x/source/corral".into(),
                 copy_globs: vec!["*.md".into()],
                 setup_command: "pnpm install".into(),
+                auto_setup: false,
                 run_command: "pnpm dev".into(),
                 project_prompt: "use pnpm, not npm".into(),
                 env: vec!["API_KEY=abc".into(), "DEBUG=true".into()],
@@ -238,6 +274,7 @@ mod tests {
         );
         assert_eq!(corral.copy_globs, vec!["*.md".to_string()]);
         assert_eq!(corral.setup_command, "pnpm install");
+        assert!(!corral.auto_setup);
         assert_eq!(corral.run_command, "pnpm dev");
         assert_eq!(corral.project_prompt, "use pnpm, not npm");
         assert_eq!(
@@ -286,9 +323,7 @@ mod tests {
                             path: PathBuf::new(),
                             copy_globs: vec![],
                             setup_command: format!("cmd-{i}"),
-                            run_command: String::new(),
-                            project_prompt: String::new(),
-                            env: vec![],
+                            ..Default::default()
                         },
                     )
                     .unwrap();

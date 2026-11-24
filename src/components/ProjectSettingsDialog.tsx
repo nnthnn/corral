@@ -26,6 +26,7 @@ export function ProjectSettingsDialog() {
   const project = useStore((s) => s.projectSettingsTarget);
   const [globsText, setGlobsText] = useState("");
   const [setupCommand, setSetupCommand] = useState("");
+  const [autoSetup, setAutoSetup] = useState(true);
   const [runCommand, setRunCommand] = useState("");
   const [projectPrompt, setProjectPrompt] = useState("");
   const [envText, setEnvText] = useState("");
@@ -43,6 +44,10 @@ export function ProjectSettingsDialog() {
       .then((settings) => {
         setGlobsText(settings.copy_globs.join("\n"));
         setSetupCommand(settings.setup_command);
+        // `!== false` rather than a truthy check: a project saved before this
+        // field existed deserializes to the backend's default (true), and an
+        // older backend that doesn't send it at all should read the same way.
+        setAutoSetup(settings.auto_setup !== false);
         setRunCommand(settings.run_command);
         setProjectPrompt(settings.project_prompt);
         setEnvText(settings.env.join("\n"));
@@ -64,6 +69,7 @@ export function ProjectSettingsDialog() {
         settings: {
           copy_globs: parseLines(globsText),
           setup_command: setupCommand,
+          auto_setup: autoSetup,
           run_command: runCommand,
           project_prompt: projectPrompt,
           env: parseLines(envText),
@@ -107,11 +113,23 @@ export function ProjectSettingsDialog() {
                 onChange={(e) => setSetupCommand(e.target.value)}
               />
             </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={autoSetup}
+                onChange={(e) => setAutoSetup(e.target.checked)}
+              />
+              Run the setup command automatically on worktree creation
+            </label>
+            <p className="hint">
+              Uncheck to leave setup manual: nothing runs when a worktree is
+              created, and the Setup tab's Re-run button starts it whenever
+              you're ready.
+            </p>
             <label>
               Run command (used to prefill the Run tab — leave blank to
               auto-detect from package.json/Cargo.toml/pyproject.toml)
               <textarea
-                rows={2}
                 value={runCommand}
                 placeholder="e.g. pnpm dev"
                 onChange={(e) => setRunCommand(e.target.value)}

@@ -46,15 +46,21 @@ function BrowserChrome() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
+    let lastUrl: string | null = null;
     void listen<BrowserState>("browser-state", (event) => {
       if (event.payload.session !== session) return;
       setState(event.payload);
-      if (!editingRef.current && event.payload.focusedTabID) {
-        const tab = event.payload.tabs.find(
-          (candidate) => candidate.id === event.payload.focusedTabID,
-        );
-        if (tab) setAddress(tab.url);
-      }
+      if (!event.payload.focusedTabID) return;
+      const tab = event.payload.tabs.find(
+        (candidate) => candidate.id === event.payload.focusedTabID,
+      );
+      if (!tab) return;
+      // While the user is typing, only follow the tab if its URL changed
+      // underneath them (back/forward, a redirect) — a title refresh must not
+      // clobber what they're typing. Outside an edit, always mirror the tab.
+      const urlChanged = tab.url !== lastUrl;
+      if (!editingRef.current || urlChanged) setAddress(tab.url);
+      lastUrl = tab.url;
     }).then((un) => {
       if (disposed) un();
       else unlisten = un;
@@ -76,7 +82,16 @@ function BrowserChrome() {
     }).catch(() => {});
     sendBounds();
     window.addEventListener("resize", sendBounds);
-    return () => window.removeEventListener("resize", sendBounds);
+    // Titles change without a navigation in single-page apps, and the backend
+    // can only read `document.title` from the main thread — so poll slowly
+    // from here rather than spinning up a backend timer.
+    const titles = window.setInterval(() => {
+      void invoke("browser_refresh_titles", { session }).catch(() => {});
+    }, 2000);
+    return () => {
+      window.removeEventListener("resize", sendBounds);
+      window.clearInterval(titles);
+    };
   }, []);
 
   return (

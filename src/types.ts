@@ -224,11 +224,17 @@ export interface Settings {
   /** Path or command name used to spawn Pi sessions when `harness === "pi"`.
    * Empty = default (`pi`, resolved via PATH). */
   pi_executable_path: string;
+  /** Attach corral's embedded browser host to OpenCode v2 sessions, which is
+   * what enables OpenCode's `browser.*` tools. On by default. */
+  browser_enabled: boolean;
 }
 
 export interface ProjectSettings {
   copy_globs: string[];
   setup_command: string;
+  /** Whether `setup_command` starts automatically when a worktree is created
+   * — the Setup tab can still run it on demand with Re-run. */
+  auto_setup: boolean;
   run_command: string;
   project_prompt: string;
   /** Per-project environment variables injected into every agent session,

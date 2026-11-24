@@ -4,6 +4,10 @@
 // of every page webview. It deliberately exposes only plain data across the
 // Tauri boundary (no DOM nodes), and all control comes from Rust -> page. The
 // page never gets to call a Tauri command.
+//
+// `window.__corral` is the one deliberately visible global: Rust calls into it
+// by name. Everything else (including per-request bookkeeping) stays
+// module-local or in a WeakMap, so injecting this never clobbers page state.
 (() => {
   if (window.__corral) return;
 
@@ -38,8 +42,8 @@
   function pushCapped(list, item, cap, onDrop) {
     list.push(item);
     while (list.length > cap) {
-      list.shift();
-      onDrop();
+      const dropped = list.shift();
+      onDrop(dropped);
     }
   }
 
@@ -154,10 +158,14 @@
   }
 
   function addRequest(record) {
-    pushCapped(requests, record, MAX_NETWORK, () => {
-      networkDropped += 1;
-    });
     requestById.set(record.id, record);
+    pushCapped(requests, record, MAX_NETWORK, (dropped) => {
+      networkDropped += 1;
+      // Keep the lookup map bounded to the same window as the list. Without
+      // this it grows forever on a long-lived page that polls — every request
+      // added an entry that would never be read again.
+      requestById.delete(dropped.id);
+    });
     return record;
   }
 
@@ -217,8 +225,14 @@
     const open = XHR.prototype.open;
     const send = XHR.prototype.send;
     const setRequestHeader = XHR.prototype.setRequestHeader;
+    // A WeakMap keyed by the request, *not* a `this.__corral` property: a
+    // public-looking property on every XHR instance collides with any page
+    // that uses the same name, shows up in `Object.keys`/`JSON.stringify` of
+    // an XHR, and leaks the record for as long as the object lives. The
+    // WeakMap is collected with the request and invisible to page code.
+    const xhrRecords = new WeakMap();
     XHR.prototype.open = function (method, url, ...rest) {
-      this.__corral = {
+      xhrRecords.set(this, {
         id: `n${++requestCounter}`,
         url: absoluteUrl(url),
         method: String(method || "GET").toUpperCase(),
@@ -229,15 +243,15 @@
         responseHeaders: [],
         requestBody: { state: "empty" },
         responseBody: { state: "notRequested" },
-      };
+      });
       return open.call(this, method, url, ...rest);
     };
     XHR.prototype.setRequestHeader = function (name, value) {
-      if (this.__corral) this.__corral.requestHeaders.push({ name, value: String(value) });
+      xhrRecords.get(this)?.requestHeaders.push({ name, value: String(value) });
       return setRequestHeader.call(this, name, value);
     };
     XHR.prototype.send = function (body) {
-      const record = this.__corral;
+      const record = xhrRecords.get(this);
       if (record) {
         if (body !== undefined && body !== null) record.requestBody = bodyState(String(body), false);
         addRequest(record);
@@ -316,21 +330,29 @@
   }
 
   // ----------------------------------------------------------------- dialog
+  // Native `confirm`/`prompt` block the page until a human answers, and there's
+  // no way to hand Rust's decision back mid-call — so answer the *optimistic*
+  // way the caller would if a user had agreed. Answering "no"/null instead
+  // makes pages take their failure branch (abort the delete, cancel the
+  // unsaved-changes flow, re-render an error), which strands the agent on a
+  // dead end it can't recover from; saying yes just lets the page proceed, and
+  // the recorded dialog is still available to `browser.dialog` so the agent
+  // (or the user) can see one happened.
+  //
+  // `alert` doesn't call the native implementation at all: the native dialog
+  // blocks the webview until dismissed, which would hang the whole session.
   for (const type of ["alert", "confirm", "prompt"]) {
-    const original = window[type]?.bind(window);
-    if (!original) continue;
+    if (!window[type]) continue;
     window[type] = (message = "", defaultValue = "") => {
       dialog = {
         type,
         message: String(message),
         defaultValue: String(defaultValue ?? ""),
+        autoAccepted: type !== "alert",
       };
-      // Native confirm/prompt are synchronous; there is no non-blocking way to
-      // wait for the agent, so the page gets the conservative answer while the
-      // dialog is recorded for browser.dialog to inspect.
-      if (type === "confirm") return false;
-      if (type === "prompt") return null;
-      return original(message);
+      if (type === "confirm") return true;
+      if (type === "prompt") return String(defaultValue ?? "");
+      return undefined;
     };
   }
 
@@ -731,6 +753,17 @@
     };
   }
 
+  /** Document size in CSS pixels, so Rust can bound a full-page screenshot
+   * before asking WebKit to render it on the main loop. */
+  function documentSize() {
+    const root = document.documentElement;
+    return {
+      width: Math.max(root?.scrollWidth || 0, document.body?.scrollWidth || 0),
+      height: Math.max(root?.scrollHeight || 0, document.body?.scrollHeight || 0),
+      dpr: window.devicePixelRatio || 1,
+    };
+  }
+
   function dialogAction(options = {}) {
     const current = dialog;
     if (options.action === "accept" || options.action === "dismiss") dialog = null;
@@ -907,6 +940,7 @@
     hover,
     fill,
     elementBox,
+    documentSize,
     fillForm,
     select,
     check,

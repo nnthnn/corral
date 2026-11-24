@@ -1,3 +1,4 @@
+pub mod fonts;
 pub mod project_settings;
 pub mod projects;
 pub mod provision;

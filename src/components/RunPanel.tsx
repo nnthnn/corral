@@ -6,7 +6,12 @@ import { Play, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { drainOutput } from "../lib/output-buffer";
 import { invoke } from "../lib/tauri";
-import { attachCopyOnCtrlC, createLinkedTerminal } from "../lib/terminal";
+import {
+  applyTerminalFont,
+  attachCopyOnCtrlC,
+  createLinkedTerminal,
+  resolveTerminalFontFamily,
+} from "../lib/terminal";
 import { showError } from "../lib/toasts";
 import { THEME } from "../session";
 import { useStore } from "../store";
@@ -30,6 +35,8 @@ const EMPTY_TARGETS: RunTargets = { source: null, targets: [] };
 export function RunPanel({ wt }: { wt: Worktree }) {
   const id = wtId(wt);
   const state = useStore((s) => s.run.get(id));
+  const fontFamily = useStore((s) => s.settings.terminal_font_family);
+  const fontSize = useStore((s) => s.settings.terminal_font_size);
   // Keyed by worktree id, not a single string — remembers what the user
   // typed (or the auto-detected prefill) per worktree across tab/worktree
   // switches, since RunPanel stays mounted (just hidden) rather than
@@ -116,6 +123,9 @@ export function RunPanel({ wt }: { wt: Worktree }) {
     if (!containerRef.current) return;
     if (!termRef.current) {
       const { term, fit } = createLinkedTerminal({
+        fontFamily: resolveTerminalFontFamily(
+          useStore.getState().settings.terminal_font_family,
+        ),
         fontSize: useStore.getState().settings.terminal_font_size,
         cursorBlink: false,
         disableStdin: true,
@@ -178,6 +188,26 @@ export function RunPanel({ wt }: { wt: Worktree }) {
       termRef.current = null;
     };
   }, [id]);
+
+  // Pick up terminal font setting changes while this panel is open. The
+  // ResizeObserver above only fires on *box* changes; a font change alters
+  // xterm's cell grid without touching the box, so this has to re-fit and
+  // re-send the PTY size itself. `applyTerminalFont` no-ops on mount (the
+  // terminal was created with the current settings), and while the tab is
+  // hidden the observer handles the refit once it's shown.
+  useEffect(() => {
+    const entry = termRef.current;
+    const el = containerRef.current;
+    if (!entry || !el) return;
+    if (!applyTerminalFont(entry.term, fontFamily, fontSize)) return;
+    if (el.clientWidth === 0 || el.clientHeight === 0) return;
+    entry.fit.fit();
+    invoke("resize_run", {
+      key: id,
+      rows: entry.term.rows,
+      cols: entry.term.cols,
+    }).catch(() => {});
+  }, [id, fontFamily, fontSize]);
 
   const running = state?.running ?? false;
 

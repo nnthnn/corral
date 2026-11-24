@@ -111,6 +111,7 @@ pub fn run() {
             commands::system::send_notification,
             commands::system::home_dir,
             commands::system::memory_usage,
+            commands::fonts::list_monospace_fonts,
             commands::projects::list_projects,
             commands::projects::project_icon,
             commands::projects::add_project,
@@ -169,6 +170,7 @@ pub fn run() {
             browser_host::browser_go_back,
             browser_host::browser_go_forward,
             browser_host::browser_reload,
+            browser_host::browser_refresh_titles,
         ])
         .setup(move |app| {
             app.manage(browser_host::BrowserHosts::default());
@@ -241,6 +243,10 @@ pub fn run() {
             // in `caffeinate::spawn_inhibit` — the kernel kills the inhibitor
             // itself in that case, so this handler only needs the clean path.
             if let tauri::RunEvent::Exit = event {
+                // Close any open corral browser windows first: their page
+                // webviews hold remote content and must not outlive the
+                // process that owns them.
+                browser_host::shutdown_all(app_handle);
                 app_handle
                     .state::<corral_core::caffeinate::InhibitGuard>()
                     .sync(false);

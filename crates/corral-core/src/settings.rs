@@ -118,6 +118,13 @@ pub struct Settings {
     /// Path or command name used to spawn Pi sessions when `harness == Pi`.
     /// Empty string means "use the default" (`pi`, resolved via `PATH`).
     pub pi_executable_path: String,
+    /// Attach corral's embedded browser host to OpenCode v2 sessions, which is
+    /// what enables OpenCode's built-in `browser.*` tools. On by default: the
+    /// attachment is what makes those tools exist at all. Turning it off
+    /// spawns nothing extra (no SSE/subscribe threads, no browser window) and
+    /// leaves the tools unavailable — useful for users who never want them, or
+    /// as a switch if a future opencode release changes the protocol.
+    pub browser_enabled: bool,
 }
 
 impl Default for Settings {
@@ -151,6 +158,7 @@ impl Default for Settings {
             opencode_executable_path: String::new(),
             opencode2_executable_path: String::new(),
             pi_executable_path: String::new(),
+            browser_enabled: true,
         }
     }
 }
@@ -365,6 +373,7 @@ mod tests {
             opencode_executable_path: String::new(),
             opencode2_executable_path: String::new(),
             pi_executable_path: "/opt/pi/bin/pi".into(),
+            browser_enabled: false,
         };
 
         save_under(&path, &s).unwrap();
@@ -401,6 +410,7 @@ mod tests {
             s.opencode2_executable_path
         );
         assert_eq!(loaded.pi_executable_path, s.pi_executable_path);
+        assert_eq!(loaded.browser_enabled, s.browser_enabled);
     }
 
     #[test]

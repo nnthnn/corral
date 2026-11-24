@@ -28,6 +28,7 @@ vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     rows = 24;
     cols = 80;
+    options = { fontFamily: "", fontSize: 13 };
     loadAddon() {}
     open() {}
     write() {}

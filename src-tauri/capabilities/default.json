@@ -20,6 +20,7 @@
     "allow-send-notification",
     "allow-home-dir",
     "allow-memory-usage",
+    "allow-list-monospace-fonts",
     "allow-list-projects",
     "allow-project-icon",
     "allow-add-project",
@@ -77,6 +78,7 @@
     "allow-browser-navigate",
     "allow-browser-go-back",
     "allow-browser-go-forward",
-    "allow-browser-reload"
+    "allow-browser-reload",
+    "allow-browser-refresh-titles"
   ]
 }

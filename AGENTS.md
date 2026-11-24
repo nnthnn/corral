@@ -37,9 +37,10 @@ corral/
 │   │   ├── hooks.rs                # Claude Code hooks -> real waiting/working status
 │   │   ├── merge.rs                # rebase onto base + fast-forward + push
 │   │   ├── pr.rs                   # push branch + open/update PR via `gh`
-│   │   ├── checks.rs               # GitHub check-run status, PR comments, merge via `gh`
+│   │   ├── checks.rs               # GitHub check-run status, PR comments/reviews, merge via `gh`
 │   │   ├── caffeinate.rs           # systemd-inhibit while any session is running
 │   │   ├── onboarding.rs           # system-prompt briefing for a freshly started agent
+│   │   │                           #   (+ BROWSER_INSTRUCTIONS for OpenCode browser tools)
 │   │   ├── names.rs                # auto-picked placeholder feature names
 │   │   ├── settings.rs             # user app preferences (disk-persisted)
 │   │   ├── bin.rs                  # resolve/validate agent CLI executables on PATH
@@ -66,6 +67,7 @@ corral/
 │   │   │                           #   (else package.json scripts)
 │   │   ├── pty_process.rs          # shared one-shot-PTY core (used by provision + run)
 │   │   ├── settings.rs             # app-settings commands
+│   │   ├── fonts.rs                # system monospaced families for the terminal font picker
 │   │   └── system.rs               # notify icon, clipboard paste, open editor/terminal
 │   ├── src/hook_listener.rs        # Unix-socket listener for Claude Code hook callbacks
 │   ├── src/opencode_events.rs      # opencode SSE stream -> session status (same sink as hooks)
@@ -444,12 +446,18 @@ See `IDEAS.md` for the backlog. As of the latest work, implemented:
   `opencode_events.rs`; Pi's bundled extension via `pi.rs`) instead of PTY
   output guessing, and an idle-timeout auto-stop.
 - **OpenCode browser tools (embedded)**: each OpenCode v2 session gets an
-  `experimental.browser` attachment (`browser_host.rs`). The browser itself is
-  a corral-owned WebKit window (`browser_window.rs`) with a tab strip + address
-  bar and one child page webview per OpenCode tab. The injected
-  `browser_agent.js` provides snapshots/refs, click/fill/select/check/press/
-  scroll, `evaluate`, screenshots (WebKit snapshot), console capture, and
-  fetch/XHR network metadata/bodies. `browser.preview` opens files in the
+  `experimental.browser` attachment (`browser_host.rs`), on by default and
+  gated by the `browser_enabled` setting (off = no threads, no SSE
+  subscription, tools unavailable). The browser itself is a corral-owned
+  WebKit window (`browser_window.rs`) with a tab strip + address bar and one
+  child page webview per OpenCode tab; tab titles are refreshed by the chrome
+  page polling `browser_refresh_titles`. The injected `browser_agent.js`
+  provides snapshots/refs, click/fill/select/check/press/scroll, `evaluate`,
+  screenshots (WebKit snapshot, bounded full-page height), console capture,
+  fetch/XHR network metadata/bodies, and auto-answered JS dialogs. The host is
+  torn down by every session-lifecycle path (`kill_session_best_effort`,
+  `close_session`, the stale-session prune, and app exit), not just by its own
+  threads noticing a dead server. `browser.preview` opens files in the
   existing File tab. Chromium-only operations (`trace.*`, `cpu.*`, `heap.*`,
   `lighthouse`) and downloads/capture files are reported as `unsupported`.
 - **3-pane shell**: sidebar (projects → worktrees) with a status dot, exit
@@ -467,4 +475,12 @@ See `IDEAS.md` for the backlog. As of the latest work, implemented:
 - **Git/PR integration**: fast-forward merge of a worktree's branch into its
   base, and push + open/update a GitHub PR via `gh`, with live CI checks.
 - **Per-project settings**, per-worktree free-text notes (sidebar subtitle,
-  untracked), and desktop notifications (with cowboy flair 🤠).
+  untracked), and desktop notifications (with cowboy flair 🤠). Provisioning
+  files and the setup command are configured per project; the setup command
+  runs automatically on worktree creation unless the project's
+  `auto_setup` toggle is off (Setup tab's Re-run still runs it on demand).
+- **Terminal font picker**: Settings lists the machine's monospaced families
+  (`commands/fonts.rs`, fontdb-backed, cached per process) in the font-family
+  `datalist`, and warns when a configured family isn't installed. Blank still
+  means the built-in monospace stack; an unavailable family falls back to it
+  instead of WebKit's proportional default, which would break xterm's grid.

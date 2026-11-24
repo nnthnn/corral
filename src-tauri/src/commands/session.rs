@@ -441,8 +441,8 @@ fn new_opencode2_token(id: &str) -> String {
 }
 
 #[tauri::command]
-pub fn list_sessions(registry: State<SessionRegistry>) -> Vec<SessionInfo> {
-    prune_stale_exited_sessions(&registry, STALE_EXITED_RETENTION);
+pub fn list_sessions(app: AppHandle, registry: State<SessionRegistry>) -> Vec<SessionInfo> {
+    prune_stale_exited_sessions(&app, &registry, STALE_EXITED_RETENTION);
     registry
         .sessions
         .lock()
@@ -456,11 +456,26 @@ pub fn list_sessions(registry: State<SessionRegistry>) -> Vec<SessionInfo> {
 /// session whose process exits on its own just sits in the map forever.
 /// Called from `list_sessions`, which the frontend already polls, so this
 /// needs no dedicated background timer.
-fn prune_stale_exited_sessions(registry: &SessionRegistry, retention: Duration) {
-    registry.sessions.lock().retain(|_, session| {
-        let exited_at = session.inner.lock().exited_at;
-        !is_stale_exited(exited_at, retention)
-    });
+///
+/// Collects the pruned ids first and tears their browser hosts down *after*
+/// releasing the registry lock: host teardown closes webviews (which dispatches
+/// to the main thread), and holding a lock across that is how deadlocks start.
+fn prune_stale_exited_sessions(app: &AppHandle, registry: &SessionRegistry, retention: Duration) {
+    let pruned: Vec<String> = {
+        let mut sessions = registry.sessions.lock();
+        let mut pruned = Vec::new();
+        sessions.retain(|id, session| {
+            let stale = is_stale_exited(session.inner.lock().exited_at, retention);
+            if stale {
+                pruned.push(id.clone());
+            }
+            !stale
+        });
+        pruned
+    };
+    for id in pruned {
+        crate::browser_host::shutdown(app, &id);
+    }
 }
 
 /// Whether a session that exited at `exited_at` (`None` if still running)
@@ -898,13 +913,19 @@ pub async fn start_session(
             // instruction entry in scope for resumed sessions too — their
             // original onboarding entry may predate this feature. Best-effort:
             // a failure only means the model misses the extra guidance.
-            if let Err(e) = corral_core::opencode::put_instruction_entry(
-                &base_url,
-                &password,
-                &session_id,
-                "corral-browser",
-                corral_core::onboarding::BROWSER_INSTRUCTIONS,
-            ) {
+            //
+            // Only when the host is actually attached: with `browser_enabled`
+            // off there are no `browser.*` tools, so telling the model about a
+            // browser window it doesn't have would just invite failed calls.
+            if settings.browser_enabled
+                && let Err(e) = corral_core::opencode::put_instruction_entry(
+                    &base_url,
+                    &password,
+                    &session_id,
+                    "corral-browser",
+                    corral_core::onboarding::BROWSER_INSTRUCTIONS,
+                )
+            {
                 tracing::warn!("start_session: failed to add browser instructions: {e}");
             }
 
@@ -1103,8 +1124,13 @@ pub async fn start_session(
                 // OpenCode's built-in `browser.*` tools (including
                 // `browser.preview`) only exist while a desktop client is
                 // attached. Only V2 has that protocol — V1 sessions have no
-                // password and are skipped.
-                if let Some(password) = opencode_password {
+                // password and are skipped. `browser_enabled` is a real opt-out
+                // because the host is not free: it spawns three threads plus an
+                // SSE subscription per session, so it must not start for users
+                // who never use the tools (or want a kill switch).
+                if settings.browser_enabled
+                    && let Some(password) = opencode_password
+                {
                     crate::browser_host::spawn(
                         app.clone(),
                         id.clone(),
@@ -1276,8 +1302,18 @@ pub fn kill_session(registry: State<SessionRegistry>, id: String) -> Result<(), 
 /// have a live session at all.
 ///
 /// The registry lock is released before `kill()` runs, so this can't hold it
-/// across the child-process wait/probe.
-pub(crate) fn kill_session_best_effort(registry: &SessionRegistry, id: &str) {
+/// across the child-process wait/probe. The session's browser host is torn down
+/// too: its threads only notice a dead `opencode serve` once their in-flight
+/// RPC returns, and a browser window (remote page content) must never outlive
+/// the session it belongs to.
+pub(crate) fn kill_session_best_effort(app: &AppHandle, registry: &SessionRegistry, id: &str) {
+    kill_session_best_effort_session(registry, id);
+    crate::browser_host::shutdown(app, id);
+}
+
+/// The registry/process half of [`kill_session_best_effort`], split out so the
+/// unit tests can drive it without an `AppHandle`.
+fn kill_session_best_effort_session(registry: &SessionRegistry, id: &str) {
     let session = registry.sessions.lock().remove(id);
     if let Some(s) = session
         && let Err(e) = s.kill()
@@ -1288,8 +1324,13 @@ pub(crate) fn kill_session_best_effort(registry: &SessionRegistry, id: &str) {
 
 /// Drop an exited session from the registry (e.g. after the user dismisses it).
 #[tauri::command]
-pub fn close_session(registry: State<SessionRegistry>, id: String) -> Result<(), String> {
+pub fn close_session(
+    app: AppHandle,
+    registry: State<SessionRegistry>,
+    id: String,
+) -> Result<(), String> {
     registry.sessions.lock().remove(&id);
+    crate::browser_host::shutdown(&app, &id);
     Ok(())
 }
 
@@ -1566,6 +1607,9 @@ mod tests {
 
     #[test]
     fn kill_session_best_effort_kills_a_registered_session() {
+        // The browser-host teardown half of this function needs a real Tauri
+        // app (it closes webviews), so it's covered by `browser_host::shutdown`'s
+        // own contract instead; here just pin the session-registry half.
         let registry = SessionRegistry::default();
         let session = Arc::new(spawn_test_session("sleep 30"));
         registry
@@ -1573,7 +1617,7 @@ mod tests {
             .lock()
             .insert("proj/feat".to_string(), session.clone());
 
-        kill_session_best_effort(&registry, "proj/feat");
+        kill_session_best_effort_session(&registry, "proj/feat");
 
         assert!(session.inner.lock().killed);
         assert!(
@@ -1586,7 +1630,7 @@ mod tests {
     fn kill_session_best_effort_is_a_noop_for_an_unregistered_id() {
         let registry = SessionRegistry::default();
         // Must not panic just because there's nothing to kill.
-        kill_session_best_effort(&registry, "no/such-session");
+        kill_session_best_effort_session(&registry, "no/such-session");
     }
 
     #[test]

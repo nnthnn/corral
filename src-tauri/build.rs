@@ -5,6 +5,7 @@ fn main() {
             "send_notification",
             "home_dir",
             "memory_usage",
+            "list_monospace_fonts",
             "list_projects",
             "project_icon",
             "add_project",
@@ -63,6 +64,7 @@ fn main() {
             "browser_go_back",
             "browser_go_forward",
             "browser_reload",
+            "browser_refresh_titles",
         ]),
     ))
     .expect("failed to run tauri-build");

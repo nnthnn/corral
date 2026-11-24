@@ -44,6 +44,7 @@ pub fn add_project(path: String) -> Result<String, String> {
 /// reappears if re-added later via `add_project`.
 #[tauri::command]
 pub fn remove_project(
+    app: tauri::AppHandle,
     session_registry: tauri::State<crate::commands::session::SessionRegistry>,
     provision_registry: tauri::State<crate::commands::provision::Registry>,
     run_registry: tauri::State<crate::commands::run::Registry>,
@@ -56,7 +57,7 @@ pub fn remove_project(
         .collect();
     for wt in &worktrees {
         let key = corral_core::agent_session::key(&wt.project, &wt.feature);
-        crate::commands::session::kill_session_best_effort(&session_registry, &key);
+        crate::commands::session::kill_session_best_effort(&app, &session_registry, &key);
         crate::commands::provision::stop_and_remove(&provision_registry, &key);
         crate::commands::run::stop_and_remove(&run_registry, &key);
         if let Err(e) = corral_core::agent_session::remove(&key) {
