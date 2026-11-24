@@ -5,15 +5,48 @@ name: Release
 # tag is created by scripts/bump-version.sh, so the version in Cargo.toml and
 # the tag are expected to agree — verified in each build job before spending
 # time bundling. Windows isn't built yet (see AGENTS.md).
+#
+# Also runnable by hand (Actions → Release → Run workflow), which builds BOTH
+# platforms and publishes nothing. That's the dry run for a release: it
+# exercises the parts a tag push can't rehearse — notably the macOS
+# universal-binary cross-compile and .dmg packaging, which `ci.yml`'s
+# `cargo check` doesn't touch. Artifacts land in the run's Artifacts section.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write # softprops/action-gh-release needs this to create the release
 
+# A dry run and a tag push for the same commit share a group, so a
+# `workflow_dispatch` fired moments before the tag can't leave its build
+# racing the real one. `github.workflow` keeps this scoped to Release runs.
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  # Is this run allowed to publish, and is there a tag to check the version
+  # against? A tag push consults `GITHUB_REF_NAME`; a manual run has no usable
+  # ref of that shape, so version verification is skipped there (the tag check
+  # below is the only use of `GITHUB_REF_NAME`, so there's nothing to fall
+  # back to — and nothing to publish).
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ github.event_name == 'push' }}
+    steps:
+      - name: Explain this run
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "Tag push — will publish a GitHub release for ${{ github.ref_name }}"
+          else
+            echo "Manual run — building both platforms for inspection only; nothing will be published."
+          fi
+
   linux:
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -50,8 +83,10 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # Guard against a tag that doesn't match the committed version (e.g. a
-      # hand-made tag or a bump that was reverted after tagging).
+      # hand-made tag or a bump that was reverted after tagging). Only
+      # meaningful on a tag push — see `prepare`.
       - name: Verify tag matches Cargo.toml version
+        if: github.event_name == 'push'
         run: |
           tag_version="${GITHUB_REF_NAME#v}"
           cargo_version="$(sed -n 's/^version = "\([^"]*\)".*/\1/p' Cargo.toml | head -n1)"
@@ -83,6 +118,7 @@ jobs:
             target/release/bundle/appimage/*.AppImage
 
   macos:
+    needs: prepare
     # macOS runners are arm64; building the universal binary also needs the
     # x86_64 target installed (below), which is why this is one job rather
     # than one per architecture.
@@ -108,6 +144,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Verify tag matches Cargo.toml version
+        if: github.event_name == 'push'
         run: |
           tag_version="${GITHUB_REF_NAME#v}"
           cargo_version="$(sed -n 's/^version = "\([^"]*\)".*/\1/p' Cargo.toml | head -n1)"
@@ -147,7 +184,9 @@ jobs:
             target/universal-apple-darwin/release/bundle/dmg/*.dmg
 
   publish:
-    needs: [linux, macos]
+    # Skipped entirely on a manual run: a dry run must never create a release.
+    if: needs.prepare.outputs.publish == 'true'
+    needs: [prepare, linux, macos]
     runs-on: ubuntu-latest
     steps:
       # Both build jobs upload their own artifacts; merge them into one flat
