@@ -85,7 +85,12 @@ pub fn create_at(parent: &Path, name: &str) -> Result<PathBuf> {
         std::fs::create_dir_all(&target)?;
     }
     init_repo(&target)?;
-    Ok(target)
+    // Return the canonical path so a relative `parent` (e.g. `corral project
+    // new foo --parent .`) is recorded absolutely: `repo_path` feeds this
+    // straight into `git`'s `current_dir`, which resolves against whatever
+    // the process's cwd happens to be at the next invocation. `register_existing`
+    // canonicalizes too, so both entry points agree.
+    std::fs::canonicalize(&target).map_err(|e| Error::Other(format!("{}: {e}", target.display())))
 }
 
 /// Initialize the *existing* empty directory `path` as a fresh git repo, with
@@ -156,7 +161,7 @@ fn init_repo(path: &Path) -> Result<()> {
     // No `user.name`/`user.email` configured (common on a fresh machine), or
     // global signing config with no usable key. Corral's bootstrap commit must
     // not depend on any of that — it's a structural placeholder, not authored
-    // work — so retry with a throwaway identity and signing off.
+    // work — so retry the commit with a throwaway identity and signing off.
     let fallback: Vec<&str> = [
         "-c",
         "user.name=Corral",
@@ -168,6 +173,9 @@ fn init_repo(path: &Path) -> Result<()> {
     .into_iter()
     .chain(COMMIT)
     .collect();
+    // Only the commit retries with these overrides: `git init` above neither
+    // signs nor needs an identity. Their job is to stop the *commit* from
+    // depending on config the user may not have (or may have broken).
     git::git(path, &fallback).inspect_err(|e| {
         tracing::warn!("project_create: could not create the initial commit in {path:?}: {e}");
     })?;
@@ -212,6 +220,28 @@ mod tests {
         let path = create_at(&nested, "myapp").unwrap();
 
         assert!(path.join(".git").exists());
+    }
+
+    #[test]
+    fn create_at_returns_a_canonical_path_for_a_relative_parent() {
+        // A relative `parent` must be recorded absolutely — the registered
+        // path is later used as `git`'s `current_dir`, so a relative one would
+        // resolve against an unrelated process cwd on the next invocation.
+        // A temp dir under the test process's cwd gives a genuinely relative
+        // spelling that's still isolated (and cleaned up) by `TempDir`.
+        let cwd = std::env::current_dir().unwrap();
+        let parent = tempfile::Builder::new()
+            .prefix("corral-relative-parent-")
+            .tempdir_in(&cwd)
+            .unwrap();
+        let canonical = std::fs::canonicalize(parent.path()).unwrap();
+        let relative = canonical.strip_prefix(&cwd).unwrap().to_path_buf();
+        assert!(!relative.is_absolute());
+
+        let path = create_at(&relative, "myapp").unwrap();
+
+        assert!(path.is_absolute(), "{path:?} should be absolute");
+        assert_eq!(path, canonical.join("myapp"));
     }
 
     #[test]

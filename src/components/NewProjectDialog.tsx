@@ -3,7 +3,7 @@ import { type FormEvent, useEffect, useRef, useState } from "react";
 import { useDialogRef } from "../hooks/useDialogRef";
 import { loadAll } from "../lib/data";
 import { invoke } from "../lib/tauri";
-import { showError } from "../lib/toasts";
+import { showError, showSuccess } from "../lib/toasts";
 import { createWorktree } from "../lib/worktrees";
 import { useStore } from "../store";
 import { wtId } from "../utils";
@@ -50,12 +50,19 @@ export function NewProjectDialog() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    const project = name.trim();
-    if (!project || submitting) return;
+    const nameTrimmed = name.trim();
+    if (!nameTrimmed || submitting) return;
     setSubmitting(true);
     try {
-      await invoke("create_project", { parent: parent.trim(), name: project });
+      // Use the name the backend registered (it normalizes/validates), not
+      // the raw input — creating the first worktree against a stale spelling
+      // would fail with "project not registered".
+      const project = await invoke("create_project", {
+        parent: parent.trim(),
+        name: nameTrimmed,
+      });
       close();
+      showSuccess(`Project ${project} created.`);
       // Mirrors `addProject`: register first, then build the first pen and
       // start its agent. A failure here must not leave the new project
       // invisible in the sidebar, so reload regardless.
@@ -78,7 +85,7 @@ export function NewProjectDialog() {
   }
 
   return (
-    <dialog id="new-project-dialog" ref={ref} onClose={close}>
+    <dialog ref={ref} onClose={close}>
       <form onSubmit={handleSubmit}>
         <h2>New project</h2>
         <label>

@@ -58,6 +58,27 @@ describe("NewProjectDialog", () => {
     expect(useStore.getState().newProjectOpen).toBe(false);
   });
 
+  it("builds the first pen from the name the backend actually registered", async () => {
+    // `create_project` may normalize what it registers; the worktree must be
+    // created for that name, not the raw input, or it fails as "not
+    // registered".
+    useStore.setState({ newProjectOpen: true });
+    vi.mocked(invoke).mockResolvedValueOnce("my-app-normalized");
+    vi.mocked(worktrees.createWorktree).mockResolvedValueOnce(wt);
+    render(<NewProjectDialog />);
+
+    fireEvent.change(screen.getByPlaceholderText("my-app"), {
+      target: { value: "My App" },
+    });
+    fireEvent.click(screen.getByText("Create"));
+
+    await vi.waitFor(() =>
+      expect(worktrees.createWorktree).toHaveBeenCalledWith(
+        "my-app-normalized",
+      ),
+    );
+  });
+
   it("queues the brief on the first session without submitting it", async () => {
     const prefillWhenReady = vi.fn();
     useStore.setState({

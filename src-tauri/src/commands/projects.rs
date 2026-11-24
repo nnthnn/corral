@@ -29,9 +29,21 @@ pub fn create_project(parent: String, name: String) -> Result<String, String> {
     if name.is_empty() {
         return Err("project name can't be empty".to_string());
     }
-    corral_core::project_create::create(&name, &parent)
-        .map(|_| name)
-        .str_err()
+    match corral_core::project_create::create(&name, &parent) {
+        Ok(_) => Ok(name),
+        Err(corral_core::Error::ProjectDirNotEmpty(dir)) => Err(format!(
+            "{} already exists and isn't empty — pick a different name or location, or use Add project to register it",
+            dir.display()
+        )),
+        // `create` validates names in `project_create`; give the dialog the
+        // same actionable copy the non-empty case gets instead of the bare
+        // "invalid name: ..." Display string.
+        Err(corral_core::Error::InvalidName(_)) => Err(
+            "that name can't be used as a folder name — use a single path segment (no slashes, no surrounding spaces)"
+                .to_string(),
+        ),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Register the directory at `path` (an absolute directory, e.g. from the

@@ -553,13 +553,26 @@ export class SessionManager {
   }
 
   /** Queue `text` to be pasted into session `id`'s terminal input — without
-   * submitting it — once that session has produced its first output. Used to
-   * seed a new project's scaffold brief: waiting for output proves the agent's
-   * own input loop is live, so the paste can't land while the tty is still in
+   * submitting it — once that session is ready for input. Used to seed a new
+   * project's scaffold brief: it's pasted once output proves the agent's own
+   * input loop is live, so the paste can't land while the tty is still in
    * canonical mode (where it would be echoed and held as a line rather than
-   * reaching the TUI). The user reviews the text and presses Enter. */
+   * reaching the TUI). The user reviews the text and presses Enter.
+   *
+   * The queue is self-healing: besides the first-output flush, a prefill
+   * queued *after* this session's terminal has already attached and flushed
+   * is released on the next `show()`. That covers the real startup race —
+   * `createWorktree` fire-and-forgets `startAgent`, so `attach_session` (and
+   * its one-shot flush) can complete before the caller gets here, and the
+   * agent may never emit another chunk soon enough to flush it. */
   prefillWhenReady(id: string, text: string): void {
-    if (text) this.pendingPrefills.set(id, text);
+    if (!text) return;
+    this.pendingPrefills.set(id, text);
+    // Attached already? Release on the next tick rather than waiting on output
+    // that may not come. `flushPrefill` needs an entry, so hide-and-show or an
+    // already-visible terminal both qualify; if neither, the normal
+    // first-output path will handle it when the session actually starts.
+    if (this.entries.has(id)) this.flushPrefill(id);
   }
 
   /** Paste a queued [`prefillWhenReady`] text once `id`'s terminal exists. */
@@ -569,6 +582,9 @@ export class SessionManager {
     const entry = this.entries.get(id);
     if (!entry) return;
     this.pendingPrefills.delete(id);
+    // `paste` goes through xterm's bracketed-paste path, which is exactly the
+    // Ctrl+V semantics the user would use — so a multi-line brief can't submit
+    // itself halfway through.
     entry.term.paste(text);
   }
 

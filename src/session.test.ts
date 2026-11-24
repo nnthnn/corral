@@ -551,6 +551,21 @@ describe("SessionManager scaffold prefill", () => {
 
     expect(term.paste).not.toHaveBeenCalled();
   });
+
+  it("flushes immediately when the terminal already attached before the prefill", async () => {
+    // The real startup race: `createWorktree` fire-and-forgets `startAgent`,
+    // so the terminal (and attach_session's one-shot flush) can complete
+    // before the caller queues the brief. If the agent's banner was in the
+    // attach buffer, no further output may ever arrive to flush it.
+    attachSession.mockResolvedValueOnce({ info: {}, buffer: [104, 105] });
+    const mgr = new SessionManager({ container, fontSize: 13 });
+    await mgr.show("corral/hulling");
+    const term = FakeTerminal.instances[0];
+
+    mgr.prefillWhenReady("corral/hulling", "scaffold a notes app");
+
+    expect(term.paste).toHaveBeenCalledWith("scaffold a notes app");
+  });
 });
 
 describe("SessionManager opencode2 update hint", () => {
