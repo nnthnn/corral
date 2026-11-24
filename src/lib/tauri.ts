@@ -8,6 +8,7 @@ import type {
   GitStatus,
   MergePrResult,
   MergeResult,
+  PlatformDefaults,
   PrDetails,
   PrInfo,
   ProjectSettings,
@@ -178,6 +179,10 @@ interface CommandMap {
   };
   home_dir: { args: undefined; result: string | null };
   memory_usage: { args: undefined; result: number | null };
+  /** The backend's platform defaults for the editor/terminal commands, so the
+   * settings form can persist them verbatim instead of hardcoding a
+   * Linux-only fallback that would overwrite a macOS default with `ghostty`. */
+  platform_defaults: { args: undefined; result: PlatformDefaults };
   copy_diagnostics: { args: undefined; result: string };
   save_pasted_image: { args: { bytes: number[] }; result: string };
   save_text_attachment: { args: { text: string }; result: string };

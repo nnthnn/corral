@@ -173,6 +173,24 @@ pub fn home_dir() -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
+/// The platform's default external-editor and external-terminal commands —
+/// the same values `Settings::default()` seeds, so the frontend can persist a
+/// blank field as the *actual* default instead of hardcoding a Linux-only
+/// fallback (`zeditor`/`ghostty`) that would clobber macOS's `zed`/`open`.
+#[derive(serde::Serialize)]
+pub struct PlatformDefaults {
+    editor_command: &'static str,
+    terminal_command: &'static str,
+}
+
+#[tauri::command]
+pub fn platform_defaults() -> PlatformDefaults {
+    PlatformDefaults {
+        editor_command: corral_core::settings::DEFAULT_EDITOR_COMMAND,
+        terminal_command: corral_core::settings::DEFAULT_TERMINAL_COMMAND,
+    }
+}
+
 /// Total resident memory (RSS) of this process and all its descendants, in
 /// bytes — `None` on platforms without a process-tree walk wired up yet
 /// (see `corral_core::process`). Polled by the sidebar header to answer "is
@@ -188,22 +206,31 @@ pub fn memory_usage() -> Option<u64> {
 /// the returned string straight to the clipboard — nothing here reads the
 /// network or writes to disk.
 ///
-/// Synchronous probing (`git --version`, `gh auth status`, …) takes a moment,
-/// so Tauri runs this off the main thread like any other command.
+/// `async` for dispatch reasons, not for awaiting inside: a non-`async`
+/// command runs inline on the IPC thread (in practice the GTK main loop), so
+/// the probes below — up to nine sequential subprocesses with 3–8s timeouts,
+/// including `gh auth status` and a full `git status` scan per worktree —
+/// froze every window for seconds. `spawn_blocking` moves the whole blocking
+/// body to Tauri's thread pool, same shape as `list_monospace_fonts`. See
+/// `start_session`'s comment for the full explanation of the split.
 #[tauri::command]
-pub fn copy_diagnostics(app: tauri::AppHandle) -> String {
+pub async fn copy_diagnostics(app: tauri::AppHandle) -> Result<String, String> {
     let version = format!(
         "{} ({})",
         app.package_info().version,
         env!("CORRAL_GIT_SHA")
     );
-    let report = corral_core::diagnostics::collect(&version, "corral-app");
-    let mut out = corral_core::diagnostics::render_markdown(&report);
-    out.push_str(&format!(
-        "\n### recent log tail\n\n```\n{}\n```\n",
-        app_log_tail()
-    ));
-    out
+    tauri::async_runtime::spawn_blocking(move || {
+        let report = corral_core::diagnostics::collect(&version, "corral-app");
+        let mut out = corral_core::diagnostics::render_markdown(&report);
+        out.push_str(&format!(
+            "\n### recent log tail\n\n```\n{}\n```\n",
+            app_log_tail()
+        ));
+        out
+    })
+    .await
+    .map_err(|e| format!("diagnostics failed: {e}"))
 }
 
 /// The last lines of this process's rolling log, with a clear placeholder

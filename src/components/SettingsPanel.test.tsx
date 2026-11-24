@@ -19,9 +19,22 @@ function mockInvoke(
   }) as typeof invoke);
 }
 
+/** The backend's platform defaults as the form fetches them on mount. */
+const PLATFORM_DEFAULTS = {
+  editor_command: "zeditor",
+  terminal_command: "ghostty",
+};
+
 beforeEach(() => {
   useStore.setState(useStore.getInitialState());
   vi.mocked(invoke).mockReset();
+  // Answer the advisory mount-time fetch every test starts with. Tests that
+  // care about the platform defaults override this via `mockInvoke`; leaving
+  // it unmocked would make the form's `.then` throw on `undefined` in every
+  // test that merely renders the panel.
+  mockInvoke({
+    platform_defaults: async () => PLATFORM_DEFAULTS,
+  });
 });
 
 describe("SettingsPanel", () => {
@@ -278,6 +291,70 @@ describe("SettingsPanel", () => {
     render(<SettingsPanel />);
     fireEvent.click(screen.getByText("Save"));
     await screen.findByText("Error: disk full");
+  });
+
+  it("persists the platform default when the command fields are blank", async () => {
+    // Regression guard for the frontend/backend default split: the platform
+    // default is macOS `zed`/`open`, so a blank field must save *that* — not
+    // the hardcoded Linux `zeditor`/`ghostty`, which would silently pin a Mac
+    // to a terminal command it doesn't have.
+    mockInvoke({
+      platform_defaults: async () => ({
+        editor_command: "zed",
+        terminal_command: "open",
+      }),
+      save_settings: async () => undefined,
+    });
+    useStore.setState((s) => ({
+      settingsOpen: true,
+      settings: { ...s.settings, editor_command: "", terminal_command: "" },
+    }));
+    render(<SettingsPanel />);
+    // Let the advisory mount fetch land so the placeholder reflects the
+    // platform default — the save path reads it synchronously.
+    await vi.waitFor(() =>
+      expect(screen.getByPlaceholderText("zed")).toBeInTheDocument(),
+    );
+
+    // Submitted directly rather than by clicking: both command inputs are
+    // `required`, so native constraint validation blocks a click-through on an
+    // empty field. This is the state a settings.json with `""` loads into.
+    fireEvent.submit(document.querySelector("form") as HTMLFormElement);
+
+    await vi.waitFor(() => {
+      const saved = useStore.getState().settings;
+      expect(saved.editor_command).toBe("zed");
+      expect(saved.terminal_command).toBe("open");
+    });
+  });
+
+  it("never blanks the command fields when the platform defaults are unavailable", async () => {
+    // The blank-field fallback must never produce an empty command just
+    // because the advisory fetch failed — an empty `editor_command` would
+    // make the "Zed" button spawn nothing.
+    mockInvoke({
+      platform_defaults: async () => {
+        throw new Error("unavailable");
+      },
+      save_settings: async () => undefined,
+    });
+    useStore.setState((s) => ({
+      settingsOpen: true,
+      settings: {
+        ...s.settings,
+        editor_command: "",
+        terminal_command: "",
+      },
+    }));
+    render(<SettingsPanel />);
+    fireEvent.submit(document.querySelector("form") as HTMLFormElement);
+
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("save_settings", expect.anything()),
+    );
+    const saved = useStore.getState().settings;
+    expect(saved.editor_command).not.toBe("");
+    expect(saved.terminal_command).not.toBe("");
   });
 
   it("shows a saving/saved sequence on the Save button, then reverts", async () => {

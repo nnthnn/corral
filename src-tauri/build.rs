@@ -24,6 +24,7 @@ fn main() {
             "notify_icon",
             "send_notification",
             "home_dir",
+            "platform_defaults",
             "memory_usage",
             "list_monospace_fonts",
             "copy_diagnostics",

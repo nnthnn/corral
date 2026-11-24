@@ -42,7 +42,7 @@ impl Probe {
     fn found(name: &str, path: PathBuf, version: Option<String>) -> Self {
         Probe {
             name: name.to_string(),
-            path: Some(abbreviate_home(&path, home_dir().as_deref())),
+            path: Some(redact_path(&path, home_dir().as_deref())),
             version,
             ok: true,
         }
@@ -61,7 +61,7 @@ impl Probe {
     fn unusable(name: &str, path: PathBuf, note: String) -> Self {
         Probe {
             name: name.to_string(),
-            path: Some(abbreviate_home(&path, home_dir().as_deref())),
+            path: Some(redact_path(&path, home_dir().as_deref())),
             version: Some(note),
             ok: false,
         }
@@ -200,12 +200,72 @@ pub fn abbreviate_home(path: &Path, home: Option<&Path>) -> String {
     shown.display().to_string()
 }
 
+/// Like [`abbreviate_home`], but never emits a path outside the home
+/// directory verbatim — the report is meant to be pasted into a public issue,
+/// and an install outside `$HOME` (a repo under `/srv` or `/opt`, a worktrees
+/// root on an external drive) would otherwise name the user's directory
+/// layout. Such paths keep their last component (enough to recognize *which*
+/// tool/dir it is) with the parent elided: `/opt/builds/corral` →
+/// `<outside home>/corral`. Paths with nothing identifying left degrade to
+/// `<outside home>`.
+///
+/// When `home` is unknown every path is outside it, so the whole thing
+/// degrades to the last-component form rather than leaking.
+pub fn redact_path(path: &Path, home: Option<&Path>) -> String {
+    if let Some(home) = home
+        && path.strip_prefix(home).is_ok()
+    {
+        return abbreviate_home(path, Some(home));
+    }
+    match path.file_name().map(|n| n.to_string_lossy()) {
+        // A bare root (`/`, or a Windows drive root) has no file name; naming
+        // it tells the reader nothing anyway.
+        Some(name) if !name.is_empty() => {
+            format!("<outside home>/{}", sanitize_component(&name))
+        }
+        _ => "<outside home>".to_string(),
+    }
+}
+
+/// A single path component made safe to render in a report. Components could
+/// themselves carry unexpected content (a directory literally named
+/// `token=abc`, a name with a newline), so non-path-ish characters are
+/// replaced rather than passed through — this is a bug-report line, not a
+/// filesystem round-trip.
+fn sanitize_component(name: &str) -> String {
+    const MAX: usize = 64;
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+' | ' ' | '@') {
+                c
+            } else {
+                '?'
+            }
+        })
+        .collect();
+    if cleaned.chars().count() <= MAX {
+        cleaned
+    } else {
+        let mut truncated: String = cleaned.chars().take(MAX).collect();
+        truncated.push('…');
+        truncated
+    }
+}
+
 /// Run `bin` with `args`, returning trimmed stdout on exit 0. Bounded by
-/// `timeout` so a wedged tool can't hang `doctor`. Synchronous by design:
-/// `doctor` is a one-shot CLI command, and the app's Copy-diagnostics button
-/// runs it on a Tauri worker thread.
+/// `timeout` so a wedged tool can't hang `doctor` or the app's
+/// Copy-diagnostics button. Blocking, but never on the caller's UI thread —
+/// the Tauri command wraps it in `spawn_blocking`.
+///
+/// stdout is drained on a dedicated thread *while* the child runs, not after
+/// it exits. A tool that writes more than the pipe buffer (~64 KB) blocks on
+/// its own `write()` until someone reads; a wait-then-read loop would let
+/// `try_wait()` spin until the deadline and report a healthy tool as broken.
+/// Same shape as `shell_env::run_with_timeout`, which solved this already.
 fn output_with_timeout(bin: &Path, args: &[&str], timeout: Duration) -> Option<String> {
     use std::io::Read;
+    use std::sync::mpsc;
 
     let mut child = std::process::Command::new(bin)
         .args(args)
@@ -214,27 +274,71 @@ fn output_with_timeout(bin: &Path, args: &[&str], timeout: Duration) -> Option<S
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                if !status.success() {
-                    return None;
-                }
-                let mut out = String::new();
-                child.stdout.take()?.read_to_string(&mut out).ok()?;
-                let out = out.trim();
-                return (!out.is_empty()).then(|| out.to_string());
-            }
-            Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return None;
-                }
-                std::thread::sleep(Duration::from_millis(25));
-            }
-            Err(_) => return None,
+    let stdout = child.stdout.take()?;
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut out = Vec::new();
+        let _ = std::io::BufReader::new(stdout).read_to_end(&mut out);
+        let _ = tx.send(out);
+    });
+
+    // Park on the exit status instead of polling, so a fast probe costs its
+    // own runtime rather than a 25 ms poll tick. Every tool probed here is a
+    // short-lived CLI, so `wait_timeout`'s helper thread per child is cheap
+    // insurance against a wedged one.
+    let Some(status) = wait_timeout(child, timeout) else {
+        // Killed by `wait_timeout` (or un-waitable): the reader thread sees
+        // EOF when the pipe closes and exits on its own.
+        return None;
+    };
+    if !status.success() {
+        return None;
+    }
+    let raw = rx.recv_timeout(timeout).ok()?;
+    let out = String::from_utf8_lossy(&raw);
+    let out = out.trim();
+    (!out.is_empty()).then(|| out.to_string())
+}
+
+/// `child.wait()` bounded by `timeout`, killing and reaping on expiry so no
+/// zombie is left behind. Consumes the child: waiting may only happen on the
+/// thread that owns it, so the caller can't be left holding a half-waited
+/// handle. `None` means "timed out or un-waitable".
+///
+/// Avoids a `wait-timeout` dependency for one call site: `std` has no timed
+/// wait, so the wait itself runs on a thread the timeout abandons. The
+/// timeout path can only kill by pid (the `Child` handle now lives on that
+/// abandoned thread), which still closes the probe's pipe; the orphaned
+/// waiter reaps it a moment later when `wait()` returns and sends to a
+/// receiver nobody is reading. Nothing is left as a zombie.
+fn wait_timeout(
+    mut child: std::process::Child,
+    timeout: Duration,
+) -> Option<std::process::ExitStatus> {
+    use std::sync::mpsc;
+
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait());
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(status)) => Some(status),
+        // Exited but un-waitable (`wait` errored) — nothing to report.
+        Ok(Err(_)) => None,
+        Err(_) => {
+            // `kill -9` by pid rather than `Child::kill()`: the handle now
+            // lives on the waiter thread. Only used to stop a wedged *probe*
+            // we spawned ourselves, and a failure (already exited, pid
+            // reused) is harmless at worst.
+            let _ = std::process::Command::new("kill")
+                .arg("-9")
+                .arg(pid.to_string())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            None
         }
     }
 }
@@ -527,21 +631,19 @@ fn state(
 
     let config = crate::paths::config_root().ok();
     let data = crate::paths::data_root().ok();
-    state.config_dir = config.as_deref().map(|p| abbreviate_home(p, home));
-    state.data_dir = data.as_deref().map(|p| abbreviate_home(p, home));
+    state.config_dir = config.as_deref().map(|p| redact_path(p, home));
+    state.data_dir = data.as_deref().map(|p| redact_path(p, home));
     state.worktrees_root = crate::config::worktrees_root()
         .ok()
-        .map(|p| abbreviate_home(&p, home));
-    state.logs_dir = data
-        .as_deref()
-        .map(|d| abbreviate_home(&d.join("logs"), home));
+        .map(|p| redact_path(&p, home));
+    state.logs_dir = data.as_deref().map(|d| redact_path(&d.join("logs"), home));
 
     if let Some(config) = config {
         state.settings_ok = parses_as::<crate::settings::Settings>(&config.join("settings.json"));
         state.projects_ok = parses_as::<BTreeMap<String, crate::project_settings::ProjectSettings>>(
             &config.join("projects.json"),
         );
-        state.latest_backup = latest_backup(&config).map(|p| abbreviate_home(&p, home));
+        state.latest_backup = latest_backup(&config).map(|p| redact_path(&p, home));
         let parse_failed = state.settings_ok == Some(false) || state.projects_ok == Some(false);
         if state.settings_ok == Some(false) {
             warnings.push("settings.json does not parse — corral is running on defaults".into());
@@ -745,6 +847,76 @@ mod tests {
     }
 
     #[test]
+    fn redact_path_keeps_the_home_prefix_form_for_under_home() {
+        let home = Path::new("/home/alice");
+        assert_eq!(
+            redact_path(Path::new("/home/alice/.local/bin/corral"), Some(home)),
+            "~/.local/bin/corral"
+        );
+        assert_eq!(redact_path(Path::new("/home/alice"), Some(home)), "~");
+    }
+
+    /// The report is pasted into public issues, so a path outside `$HOME`
+    /// must not be emitted verbatim — it would name the user's layout (an
+    /// install under `/opt`, a worktrees root on a mounted drive).
+    #[test]
+    fn redact_path_elides_outside_home_parents() {
+        let home = Path::new("/home/alice");
+        assert_eq!(
+            redact_path(Path::new("/opt/builds/corral"), Some(home)),
+            "<outside home>/corral"
+        );
+        assert_eq!(
+            redact_path(Path::new("/srv/projects/myapp"), Some(home)),
+            "<outside home>/myapp"
+        );
+        // A bare root names nobody and tells the reader nothing.
+        assert_eq!(redact_path(Path::new("/"), Some(home)), "<outside home>");
+    }
+
+    /// Unknown home ⇒ *everything* is outside it, so the fallback form has to
+    /// be used rather than falling through to the raw path.
+    #[test]
+    fn redact_path_without_home_never_leaks_the_full_path() {
+        let out = redact_path(Path::new("/home/alice/.local/bin/corral"), None);
+        assert_eq!(out, "<outside home>/corral");
+        assert!(!out.contains("alice"));
+    }
+
+    #[test]
+    fn redact_path_sanitizes_and_bounds_the_component() {
+        // A directory name can itself carry punctuation or control characters;
+        // this is a report line, not a filesystem round-trip.
+        assert_eq!(
+            redact_path(Path::new("/opt/a b\tc/name\nwith:colon"), None),
+            "<outside home>/name?with?colon"
+        );
+        let long = format!("/opt/{}", "x".repeat(200));
+        let out = redact_path(Path::new(&long), None);
+        // `<outside home>/` + 64 chars + the ellipsis.
+        assert_eq!(out.chars().count(), "<outside home>/".len() + 65);
+        assert!(out.ends_with('…'));
+    }
+
+    /// The redaction is only worth anything if prose fields can't smuggle the
+    /// raw path back in. This pins the contract the module doc states.
+    #[test]
+    fn a_collected_report_contains_no_absolute_paths_outside_home() {
+        let report = collect("0.0.0 (test)", "corral");
+        let mut rendered = render_text(&report);
+        rendered.push_str(&render_markdown(&report));
+        // Every absolute-path token must have been redacted to a relative or
+        // `~`/`<outside home>` form. This catches a new field that formats a
+        // `Path` with `{}` instead of routing it through `redact_path`.
+        for token in rendered.split_whitespace() {
+            assert!(
+                !token.starts_with('/'),
+                "absolute path {token:?} leaked into the diagnostics report"
+            );
+        }
+    }
+
+    #[test]
     fn cleans_version_strings_from_different_tools() {
         assert_eq!(clean_version("git version 2.56.1"), "2.56.1");
         assert_eq!(clean_version("gh version 2.105.0 (2026-11-18)"), "2.105.0");
@@ -752,6 +924,61 @@ mod tests {
         assert_eq!(clean_version("just 1.59.0"), "1.59.0");
         assert_eq!(clean_version("2.1.266 (Claude Code)"), "2.1.266");
         assert_eq!(clean_version("1.5.2"), "1.5.2");
+    }
+
+    /// Regression test for the wait-then-read bug: a tool that writes more
+    /// than the ~64 KB pipe buffer must still be read successfully. The old
+    /// implementation only started reading after `try_wait()` reported exit,
+    /// so the child blocked on `write()` forever and the probe timed out.
+    #[cfg(unix)]
+    #[test]
+    fn reads_output_larger_than_the_pipe_buffer() {
+        // 200 KB is comfortably past Linux's default 64 KB pipe capacity and
+        // macOS's 16 KB one.
+        let out = output_with_timeout(
+            Path::new("sh"),
+            &["-c", "i=0; while [ $i -lt 2000 ]; do echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789; i=$((i+1)); done"],
+            Duration::from_secs(10),
+        )
+        .expect("a 200 KB write must not deadlock against the pipe buffer");
+        assert_eq!(out.lines().count(), 2000);
+    }
+
+    /// A probe that outlives its timeout is killed and reported as absent,
+    /// rather than hanging `doctor`.
+    #[cfg(unix)]
+    #[test]
+    fn a_hung_probe_times_out_instead_of_blocking() {
+        let started = std::time::Instant::now();
+        let out = output_with_timeout(
+            Path::new("sh"),
+            &["-c", "sleep 30 & wait"],
+            Duration::from_millis(150),
+        );
+        assert!(out.is_none(), "a hung probe must report no output");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "must return near the timeout, took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_nonzero_exit_reports_no_output() {
+        // Exit status, not content, decides: `echo hi; exit 1` prints output
+        // but the tool still failed, so there's no version to report.
+        assert!(
+            output_with_timeout(Path::new("sh"), &["-c", "exit 3"], Duration::from_secs(5))
+                .is_none()
+        );
+        assert!(
+            output_with_timeout(
+                Path::new("sh"),
+                &["-c", "echo hi; exit 1"],
+                Duration::from_secs(5)
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -767,9 +994,24 @@ mod tests {
             PathBuf::from("/usr/bin/gh"),
             "not authenticated".into(),
         );
+        // `/usr/bin` isn't under `$HOME`, so the path is redacted to its
+        // identifying component (see `redact_path`) — the report is pasted
+        // into public issues.
         assert_eq!(
             format_probe(&probe),
-            "gh: /usr/bin/gh [not authenticated]\n"
+            "gh: <outside home>/gh [not authenticated]\n"
+        );
+    }
+
+    #[test]
+    fn probe_under_home_keeps_the_tilde_form() {
+        let home = crate::config::home_dir().ok();
+        let Some(home) = home else { return };
+        let probe = Probe::found("claude", home.join(".local/bin/claude"), None);
+        assert_eq!(
+            probe.path.as_deref(),
+            Some("~/.local/bin/claude"),
+            "a tool installed under home should stay readable in the report"
         );
     }
 

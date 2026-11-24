@@ -175,6 +175,7 @@ pub fn run() {
             commands::system::notify_icon,
             commands::system::send_notification,
             commands::system::home_dir,
+            commands::system::platform_defaults,
             commands::system::memory_usage,
             commands::fonts::list_monospace_fonts,
             commands::system::copy_diagnostics,

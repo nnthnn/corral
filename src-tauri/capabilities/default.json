@@ -19,6 +19,7 @@
     "allow-notify-icon",
     "allow-send-notification",
     "allow-home-dir",
+    "allow-platform-defaults",
     "allow-memory-usage",
     "allow-list-monospace-fonts",
     "allow-copy-diagnostics",

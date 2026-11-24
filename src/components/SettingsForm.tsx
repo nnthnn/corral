@@ -12,7 +12,7 @@ import { playSoundChoice, SOUND_OPTIONS } from "../lib/notifications";
 import { cancelScheduledSettingsSave, saveSettings } from "../lib/settings";
 import { invoke } from "../lib/tauri";
 import { useStore } from "../store";
-import type { Settings, SoundChoice } from "../types";
+import type { PlatformDefaults, Settings, SoundChoice } from "../types";
 import { Button } from "./Button";
 import styles from "./SettingsForm.module.css";
 
@@ -33,6 +33,14 @@ export function SettingsForm() {
     families: FALLBACK_MONOSPACE_FONTS,
     enumerated: false,
   });
+  // The backend's platform defaults for the two command fields. A blank field
+  // must persist *these* (macOS: `zed`/`open`), not a hardcoded Linux value —
+  // the backend's `Settings::default()` seeds the same pair, so saving the
+  // default verbatim round-trips instead of silently pinning `ghostty` on a
+  // Mac. Starts `null` and falls back to the loaded settings' own values, so a
+  // slow/mocked backend can't make the field look empty.
+  const [platformDefaults, setPlatformDefaults] =
+    useState<PlatformDefaults | null>(null);
   const [diffFontSize, setDiffFontSize] = useState(
     String(initial.diff_font_size),
   );
@@ -114,6 +122,13 @@ export function SettingsForm() {
     monospaceFonts().then((fonts) => {
       if (!cancelled) setTerminalFonts(fonts);
     });
+    // Advisory only: if the backend can't answer, the save path falls back to
+    // whatever is already in the field, so nothing is lost.
+    invoke("platform_defaults")
+      .then((defaults) => {
+        if (!cancelled) setPlatformDefaults(defaults);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -161,10 +176,19 @@ export function SettingsForm() {
     // in TerminalHost.tsx) when they detect a change, so `s.settings` captured
     // before those calls is stale. Spreading from a fresh read here ensures
     // we don't clobber the font values they just applied.
+    // Fall back to the loaded value (not a hardcoded string) so a failed
+    // `platform_defaults` fetch can never blank out a real setting. If the
+    // stored value is *also* blank, save the platform default so a
+    // hand-edited `settings.json` with "" gets repaired on the next Save
+    // instead of persisting an empty command.
     const current = useStore.getState().settings;
+    const editorFallback =
+      platformDefaults?.editor_command || current.editor_command;
+    const terminalFallback =
+      platformDefaults?.terminal_command || current.terminal_command;
     const updated = {
       ...current,
-      editor_command: editorCommand.trim() || "zeditor",
+      editor_command: editorCommand.trim() || editorFallback || "zeditor",
       notifications_enabled: notificationsEnabled,
       extra_instructions: extraInstructions.trim(),
       skip_permissions: skipPermissions,
@@ -185,7 +209,7 @@ export function SettingsForm() {
       delete_branch_default: deleteBranchDefault,
       caffeinate_enabled: caffeinateEnabled,
       worktrees_root: trimmedWorktreesRoot,
-      terminal_command: terminalCommand.trim() || "ghostty",
+      terminal_command: terminalCommand.trim() || terminalFallback || "ghostty",
       idle_timeout_enabled: idleTimeoutEnabled,
       idle_timeout_minutes:
         Number.isFinite(parsedIdleTimeoutMinutes) &&
@@ -260,7 +284,7 @@ export function SettingsForm() {
               Editor command
               <input
                 list="editor-command-list"
-                placeholder="zeditor"
+                placeholder={platformDefaults?.editor_command ?? "zeditor"}
                 required
                 value={editorCommand}
                 onChange={(e) => setEditorCommand(e.target.value)}
@@ -278,7 +302,7 @@ export function SettingsForm() {
               Terminal command
               <input
                 list="terminal-command-list"
-                placeholder="ghostty"
+                placeholder={platformDefaults?.terminal_command ?? "ghostty"}
                 required
                 value={terminalCommand}
                 onChange={(e) => setTerminalCommand(e.target.value)}
