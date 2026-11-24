@@ -502,6 +502,57 @@ describe("SessionManager prompt submission", () => {
   });
 });
 
+describe("SessionManager scaffold prefill", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    listeners.clear();
+    attachSession.mockReset();
+    attachSession.mockResolvedValue({ info: {}, buffer: [] });
+    writeSession.mockReset();
+    writeSession.mockResolvedValue(undefined);
+    FakeTerminal.instances.length = 0;
+    container = document.createElement("div");
+    document.body.appendChild(container);
+  });
+
+  it("pastes a queued prefill on first output without submitting it", async () => {
+    const mgr = new SessionManager({ container, fontSize: 13 });
+    mgr.prefillWhenReady("corral/hulling", "scaffold a notes app");
+    await mgr.show("corral/hulling");
+    const term = FakeTerminal.instances[0];
+    expect(term.paste).not.toHaveBeenCalled();
+
+    fire("session-output", {
+      id: "corral/hulling",
+      data: btoa("hello"),
+    });
+
+    expect(term.paste).toHaveBeenCalledWith("scaffold a notes app");
+    // Prefill only seeds the input — the user presses Enter themselves.
+    expect(writeSession).not.toHaveBeenCalledWith({
+      id: "corral/hulling",
+      data: "\r",
+    });
+
+    // Only the first output chunk flushes it; later output must not re-paste.
+    fire("session-output", { id: "corral/hulling", data: btoa("more") });
+    expect(term.paste).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a queued prefill when the session exits before it flushes", async () => {
+    const mgr = new SessionManager({ container, fontSize: 13 });
+    mgr.prefillWhenReady("corral/hulling", "scaffold a notes app");
+    await mgr.show("corral/hulling");
+    const term = FakeTerminal.instances[0];
+
+    fire("session-exit", { id: "corral/hulling", code: 0, killed: false });
+    fire("session-output", { id: "corral/hulling", data: btoa("hello") });
+
+    expect(term.paste).not.toHaveBeenCalled();
+  });
+});
+
 describe("SessionManager opencode2 update hint", () => {
   let container: HTMLDivElement;
 

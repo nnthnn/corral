@@ -39,6 +39,14 @@ fn resolve_worktrees_root(configured: &str, home: &Path) -> PathBuf {
     expand_tilde(trimmed, home)
 }
 
+/// [`expand_tilde`] against the real home directory — for user-supplied paths
+/// from the CLI/GUI (e.g. a new project's parent folder). Unlike
+/// [`expand_tilde`] this can fail (no home directory), and like it, leaves
+/// relative paths alone.
+pub fn expand_tilde_input(input: &str) -> Result<PathBuf> {
+    Ok(expand_tilde(input, &home_dir()?))
+}
+
 /// Expands a leading `~` or `~/...` to `home`. Any other input (including
 /// relative paths) is returned as-is — validating that the input is usable
 /// is the caller's job (the CLI `set` command, the GUI settings form), not

@@ -79,7 +79,8 @@ corral open <feature>                     # open the worktree in Zed
 corral rename "<title>"                   # rename the current worktree (slugified from the title)
 corral done <feature>                     # remove worktree + delete branch
 corral done <feature> --keep-branch       # remove worktree, keep the branch
-corral project add <path>                 # register an existing git repo as a project
+corral project add <path>                 # register an existing git repo (or an empty folder)
+corral project new <name> --parent <dir>  # create + git-init a brand-new project (default parent: ~/source)
 corral config get                         # print the resolved worktrees root
 corral config set <path>                  # override the worktrees root
 corral config reset                       # revert to the default (~/corral)
@@ -116,6 +117,9 @@ Implemented:
   CLI, with per-worktree git status (branch, ahead/behind, dirty counts),
   per-project provisioning rules (files to copy + a one-shot setup command),
   and a filesystem watcher so changes made outside the GUI show up live.
+  Start a **new project** from within corral: it creates the folder, initializes
+  it as a git repo with one empty commit, and opens the first worktree for an
+  agent to scaffold in (or register an existing empty folder the same way).
 - **Agent sessions**: run Claude Code, OpenCode, or Pi in a PTY inside a worktree,
   stream it to an embedded xterm.js terminal (scrollback re-attach,
   GPU-rendered), type into it, and stop/restart. Claude Code hooks, OpenCode's

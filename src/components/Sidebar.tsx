@@ -1,8 +1,14 @@
 import { getVersion } from "@tauri-apps/api/app";
-import { FolderPlus, RefreshCw, Search, Settings } from "lucide-react";
+import {
+  FolderGit2,
+  FolderPlus,
+  RefreshCw,
+  Search,
+  Settings,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { loadAll } from "../lib/data";
-import { addProject } from "../lib/projects";
+import { addProject, openNewProjectDialog } from "../lib/projects";
 import { toggleSetting } from "../lib/settings";
 import { invoke } from "../lib/tauri";
 import { runningSessionCount, useStore } from "../store";
@@ -85,6 +91,15 @@ export function Sidebar() {
             onClick={() => loadAll()}
           >
             <RefreshCw size={14} />
+          </Button>
+          <Button
+            variant="ghost"
+            icon
+            className="size-7 p-0 flex items-center justify-center"
+            title="New project"
+            onClick={() => openNewProjectDialog()}
+          >
+            <FolderGit2 size={14} />
           </Button>
           <Button
             variant="ghost"

@@ -26,6 +26,7 @@ pub mod pi;
 pub mod pr;
 pub mod process;
 pub mod project;
+pub mod project_create;
 pub mod project_settings;
 pub mod settings;
 pub mod watch;

@@ -1,5 +1,11 @@
 import clsx from "clsx";
-import { FolderPlus, RefreshCw, Search, Settings } from "lucide-react";
+import {
+  FolderGit2,
+  FolderPlus,
+  RefreshCw,
+  Search,
+  Settings,
+} from "lucide-react";
 import {
   type KeyboardEvent,
   useEffect,
@@ -9,13 +15,13 @@ import {
 } from "react";
 import { selectWorktree } from "../lib/actions";
 import { loadAll } from "../lib/data";
-import { addProject } from "../lib/projects";
+import { addProject, openNewProjectDialog } from "../lib/projects";
 import { useStore } from "../store";
 import type { Worktree } from "../types";
 import { orderProjects, worktreeTitle, wtId } from "../utils";
 import { Highlight } from "./Highlight";
 
-type ActionId = "settings" | "refresh" | "add-project";
+type ActionId = "settings" | "refresh" | "add-project" | "new-project";
 
 interface Action {
   kind: "action";
@@ -32,6 +38,12 @@ const ACTIONS: Action[] = [
   { kind: "action", id: "settings", label: "Settings", Icon: Settings },
   { kind: "action", id: "refresh", label: "Refresh", Icon: RefreshCw },
   { kind: "action", id: "add-project", label: "Add project", Icon: FolderPlus },
+  {
+    kind: "action",
+    id: "new-project",
+    label: "New project",
+    Icon: FolderGit2,
+  },
 ];
 
 function close(): void {
@@ -42,6 +54,7 @@ function runAction(id: ActionId): void {
   if (id === "settings") useStore.setState({ settingsOpen: true });
   else if (id === "refresh") loadAll();
   else if (id === "add-project") void addProject();
+  else if (id === "new-project") openNewProjectDialog();
 }
 
 /** Match the same fields the sidebar filter does, so palette behavior doesn't

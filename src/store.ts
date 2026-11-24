@@ -211,6 +211,9 @@ export interface AppState {
   /** Project name currently shown in `RemoveProjectDialog`, or `null` if
    * closed. */
   removeProjectTarget: string | null;
+  /** Whether `NewProjectDialog` is open — the "start a brand-new project"
+   * flow (create folder, git init, first pen). */
+  newProjectOpen: boolean;
   /** Post-create setup-command output, keyed like `wtId` (`<project>/<feature>`)
    * — populated by `provisioning-events.ts`'s listeners and by
    * `ProvisionPanel`'s reattach fetch. */
@@ -279,6 +282,7 @@ export const useStore = create<AppState>(() => ({
   renameTarget: null,
   projectSettingsTarget: null,
   removeProjectTarget: null,
+  newProjectOpen: false,
   provisioning: new Map(),
   run: new Map(),
   toasts: [],

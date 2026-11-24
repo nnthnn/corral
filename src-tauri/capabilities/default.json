@@ -24,6 +24,7 @@
     "allow-list-projects",
     "allow-project-icon",
     "allow-add-project",
+    "allow-create-project",
     "allow-remove-project",
     "allow-list-worktrees",
     "allow-set-worktree-note",

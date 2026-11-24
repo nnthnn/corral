@@ -1,7 +1,7 @@
-import { FolderPlus, Loader2, Plus } from "lucide-react";
+import { FolderGit2, FolderPlus, Loader2, Plus } from "lucide-react";
 import buckBodyFront from "../assets/buck/buck-body-front.png";
 import { agentButtonLabel, startAgent } from "../lib/agent-actions";
-import { addProject } from "../lib/projects";
+import { addProject, openNewProjectDialog } from "../lib/projects";
 import { focusFirstProjectCreate, openDeleteDialog } from "../lib/worktrees";
 import { useStore } from "../store";
 import type { Worktree } from "../types";
@@ -97,6 +97,14 @@ export function Detail({
             Pick a project. Buck'll set up the pen.
           </p>
           <div className="detail-actions flex gap-3 mt-2">
+            <button
+              type="button"
+              className={CARD_CLASS}
+              onClick={() => openNewProjectDialog()}
+            >
+              <FolderGit2 size={20} className="text-muted" aria-hidden />
+              <span>New project</span>
+            </button>
             <button
               type="button"
               className={CARD_CLASS}
