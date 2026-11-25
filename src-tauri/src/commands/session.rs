@@ -1068,7 +1068,8 @@ pub async fn start_session(
         // before the internal vars below so the hook socket / session id /
         // TERM / marker / password and the denylist strip all take precedence
         // over them.
-        for (key, value) in project_settings.env_vars() {
+        let project_env: Vec<(&str, &str)> = project_settings.env_vars().collect();
+        for (key, value) in &project_env {
             cmd.env(key, value);
         }
         // Put the CLI bundled with this app install on the agent's PATH, so
@@ -1083,11 +1084,11 @@ pub async fn start_session(
         if let Some(cli) = corral_core::bin::corral_cli_path()
             && let Some(dir) = cli.parent()
         {
-            let project_path = project_settings
-                .env_vars()
+            let project_path = project_env
+                .iter()
                 .filter(|(key, _)| *key == "PATH")
                 .map(|(_, value)| value.to_string())
-                .last();
+                .next_back();
             let base = project_path
                 .or_else(|| std::env::var("PATH").ok())
                 .unwrap_or_default();

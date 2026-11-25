@@ -58,10 +58,15 @@ just bundle
 # target/release/bundle/dmg/*.dmg
 ```
 
-The default build is host-arch (arm64 on Apple Silicon). For an Intel Mac, use
-`just universal` — it produces a fat app **and** a fat bundled CLI, which is
-required: a universal app with an arm64-only CLI still launches under Rosetta
-and then fails every status hook with `bad CPU type in executable`.
+The default build is host-arch (arm64 on Apple Silicon), and its dmg lands in
+`target/release/bundle/dmg/`. For an Intel Mac, use `just universal` — it
+produces a fat app **and** a fat bundled CLI, which is required: a universal app
+with an arm64-only CLI still launches under Rosetta and then fails every status
+hook with `bad CPU type in executable`. A universal build uses a different
+target directory, so its dmg is at
+`target/universal-apple-darwin/release/bundle/dmg/` (the recipe prints the
+path). `just universal` also runs `lipo -archs` over every nested executable so
+you can confirm each one is `x86_64 arm64`.
 
 The `.dmg` ships the `corral` CLI inside the app at
 `Corral.app/Contents/MacOS/corral`. Agents launched by corral get it on their

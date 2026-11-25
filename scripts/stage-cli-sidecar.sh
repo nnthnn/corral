@@ -25,18 +25,38 @@ if [[ -z "$triple" ]]; then
   triple="$(rustc -vV | sed -n 's/^host: //p')"
 fi
 
+# `--locked` keeps a *release* reproducible from the committed `Cargo.lock`
+# (mirroring the workflow's `--frozen-lockfile` for pnpm). Only applied when
+# GitHub Actions runs it (`CI` is set there), so a local `just bundle` still
+# works while a lockfile is being changed — CI is exactly where an out-of-date
+# lockfile should fail loudly instead.
+locked=()
+if [[ -n "${CI:-}" ]]; then
+  locked=(--locked)
+fi
+
 profile_dir="release"
-cargo_args=(build -p corral-cli --release)
+cargo_args=(build -p corral-cli --release "${locked[@]}")
 if [[ "${TAURI_ENV_DEBUG:-}" == "true" ]]; then
   profile_dir="debug"
-  cargo_args=(build -p corral-cli)
+  cargo_args=(build -p corral-cli "${locked[@]}")
 fi
+
+# The message `src-tauri/build.rs` writes into its compile-time placeholder.
+# Stage a real CLI over it below; the check at the end refuses to leave one in
+# place, because a bundle carrying the placeholder builds fine but silently
+# breaks every Claude Code status hook.
+placeholder_marker="this bundle was built without the CLI sidecar"
 
 target_dir="${CARGO_TARGET_DIR:-target}"
 mkdir -p src-tauri/binaries
 destination="src-tauri/binaries/corral-$triple"
 
 if [[ "$triple" == universal-apple-darwin ]]; then
+  if ! command -v lipo >/dev/null 2>&1; then
+    echo "error: lipo is required for universal-apple-darwin (macOS only)" >&2
+    exit 1
+  fi
   slices=()
   for arch in aarch64-apple-darwin x86_64-apple-darwin; do
     cargo "${cargo_args[@]}" --target "$arch"
@@ -45,8 +65,28 @@ if [[ "$triple" == universal-apple-darwin ]]; then
   lipo -create "${slices[@]}" -output "$destination"
 else
   cargo "${cargo_args[@]}" --target "$triple"
-  cp "$target_dir/$triple/$profile_dir/corral" "$destination"
+  built="$target_dir/$triple/$profile_dir/corral"
+  if [[ ! -x "$built" ]]; then
+    echo "error: cargo succeeded but $built is missing; check that" >&2
+    echo "       CARGO_TARGET_DIR (${CARGO_TARGET_DIR:-unset}) points at the workspace target dir" >&2
+    exit 1
+  fi
+  cp "$built" "$destination"
 fi
 
 chmod +x "$destination"
+
+# A successful build should always have replaced the placeholder, but a stale
+# `cp` path or a partial checkout could leave it. Fail loudly here rather than
+# shipping hooks that exit 127. `grep` exits 1 for "no match", 2 for an error.
+status=0
+grep -qF "$placeholder_marker" "$destination" || status=$?
+if [[ "$status" -eq 0 ]]; then
+  echo "error: $destination is still the build.rs placeholder, not the real CLI" >&2
+  exit 1
+elif [[ "$status" -ne 1 ]]; then
+  echo "error: could not read $destination to verify it" >&2
+  exit 1
+fi
+
 echo "staged sidecar: $destination"

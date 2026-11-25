@@ -138,8 +138,48 @@ fn is_corral_hook_command(command: &str) -> bool {
         && words[1] == "notify-hook"
 }
 
+/// Whether a group has no reason to exist once corral's hooks are removed:
+/// its `hooks` are empty, or every remaining hook is one corral installed
+/// (from any slot). Groups still holding a user hook are kept.
+fn group_is_only_managed(group: &Value) -> bool {
+    group
+        .get("hooks")
+        .and_then(Value::as_array)
+        .is_some_and(|hooks| {
+            hooks.iter().all(|hook| {
+                hook.get("command")
+                    .and_then(Value::as_str)
+                    .is_some_and(is_corral_hook_command)
+            })
+        })
+}
+
 fn matcher_matches(group: &Value, matcher: Option<&str>) -> bool {
     group.get("matcher").and_then(Value::as_str) == matcher
+}
+
+/// Whether a group belongs to `spec`'s slot within its event array.
+///
+/// The matcher is what separates specs that share an event and a status verb
+/// — all three `Notification` specs report `waiting`. A group with *no*
+/// matcher is also treated as belonging to any slot: an entry corral wrote
+/// before matchers were compared this way (or one a user stripped) would
+/// otherwise look foreign and get a duplicate appended next to it.
+fn group_belongs_to(group: &Value, spec: &HookSpec) -> bool {
+    matcher_matches(group, spec.matcher) || group.get("matcher").and_then(Value::as_str).is_none()
+}
+
+/// Every corral-managed command in `spec`'s slot, in any group.
+fn managed_commands_for(entries: &[Value], spec: &HookSpec) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|group| group_belongs_to(group, spec))
+        .filter_map(|group| group.get("hooks").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|hook| hook.get("command").and_then(Value::as_str))
+        .filter(|command| is_corral_hook_command(command))
+        .map(str::to_string)
+        .collect()
 }
 
 /// Merge corral's status-tracking hooks into a settings JSON document,
@@ -179,43 +219,31 @@ pub fn merge_hooks(doc: &mut Value, cli: Option<&Path>) -> bool {
             .as_array_mut()
             .expect("just ensured entries is an array");
 
-        let managed: Vec<String> = entries
-            .iter()
-            .filter(|group| matcher_matches(group, spec.matcher))
-            .filter_map(|group| group.get("hooks").and_then(Value::as_array))
-            .flatten()
-            .filter_map(|hook| hook.get("command").and_then(Value::as_str))
-            .filter(|command| is_corral_hook_command(command))
-            .map(str::to_string)
-            .collect();
+        // Scoped to this spec's slot (see `group_belongs_to`), so specs that
+        // share an event and verb — all three `Notification` entries report
+        // `waiting` — never remove each other's hooks.
+        let managed = managed_commands_for(entries, spec);
 
         // Already in the exact desired state (one managed entry, pointing at
         // the right CLI): leave the document alone.
-        if managed.len() == 1 && managed[0] == command {
+        if matches!(managed.as_slice(), [only] if only == &command) {
             continue;
         }
 
         if !managed.is_empty() {
-            for group in entries
-                .iter_mut()
-                .filter(|group| matcher_matches(group, spec.matcher))
-            {
+            // Every managed command in this slot is replaced by the canonical
+            // one below; drop them from every group they appear in.
+            for group in entries.iter_mut() {
                 if let Some(hooks) = group.get_mut("hooks").and_then(Value::as_array_mut) {
                     hooks.retain(|hook| {
                         hook.get("command")
                             .and_then(Value::as_str)
-                            .is_none_or(|command| !is_corral_hook_command(command))
+                            .is_none_or(|command| !managed.iter().any(|m| m == command))
                     });
                 }
             }
-            // Drop groups that existed only to hold a stale corral hook.
-            entries.retain(|group| {
-                !matcher_matches(group, spec.matcher)
-                    || group
-                        .get("hooks")
-                        .and_then(Value::as_array)
-                        .is_none_or(|hooks| !hooks.is_empty())
-            });
+            // Drop groups left holding only corral hooks (from any slot).
+            entries.retain(|group| !group_is_only_managed(group));
         }
 
         let mut group = json!({
@@ -366,6 +394,72 @@ mod tests {
             stop[0]["hooks"][0]["command"],
             "'/Applications/Corral.app/Contents/MacOS/corral' notify-hook waiting"
         );
+    }
+
+    #[test]
+    fn merge_hooks_replaces_a_managed_hook_under_an_unexpected_matcher() {
+        // Neither of these groups matches the spec's matcher exactly, so an
+        // identity check that looked at matchers would treat them as foreign
+        // and append a third entry instead of consolidating.
+        let mut doc = json!({
+            "hooks": {
+                "Notification": [
+                    {
+                        "matcher": ["permission_prompt"],
+                        "hooks": [{ "type": "command", "command": "corral notify-hook waiting" }]
+                    },
+                    {
+                        "hooks": [{ "type": "command", "command": "echo unrelated" }]
+                    }
+                ]
+            }
+        });
+
+        assert!(merge_hooks(&mut doc, Some(Path::new("/app/corral"))));
+
+        let notifications = doc["hooks"]["Notification"].as_array().unwrap();
+        let commands: Vec<&str> = notifications
+            .iter()
+            .flat_map(|group| group["hooks"].as_array().unwrap())
+            .map(|hook| hook["command"].as_str().unwrap())
+            .collect();
+        assert!(!commands.contains(&"corral notify-hook waiting"));
+        assert!(commands.contains(&"echo unrelated"));
+        let spawned: Vec<&str> = notifications
+            .iter()
+            .filter(|g| g.get("matcher").and_then(Value::as_str).is_some())
+            .flat_map(|g| g["hooks"].as_array().unwrap())
+            .map(|hook| hook["command"].as_str().unwrap())
+            .collect();
+        assert!(
+            spawned
+                .iter()
+                .all(|c| *c == "'/app/corral' notify-hook waiting"),
+            "stale entries must be replaced by the canonical command: {spawned:?}"
+        );
+    }
+
+    #[test]
+    fn merge_hooks_replaces_each_shared_event_slot_independently() {
+        // All three `Notification` specs share an event *and* report
+        // "waiting", so a slot has to be identified by its matcher. Re-running
+        // with a new CLI must update each one in place, leaving three groups.
+        let mut doc = json!({});
+        assert!(merge_hooks(&mut doc, None));
+
+        let moved = Path::new("/Applications/Corral.app/Contents/MacOS/corral");
+        assert!(merge_hooks(&mut doc, Some(moved)));
+
+        let notifications = doc["hooks"]["Notification"].as_array().unwrap();
+        assert_eq!(notifications.len(), 3);
+        for group in notifications {
+            let hooks = group["hooks"].as_array().unwrap();
+            assert_eq!(hooks.len(), 1, "each slot keeps exactly one hook");
+            assert_eq!(
+                hooks[0]["command"],
+                "'/Applications/Corral.app/Contents/MacOS/corral' notify-hook waiting"
+            );
+        }
     }
 
     #[test]

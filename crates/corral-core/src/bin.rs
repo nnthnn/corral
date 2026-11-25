@@ -40,12 +40,28 @@ const CLI_BINARY_NAME: &str = "corral";
 ///
 /// The app and CLI ship together — as a Tauri `externalBin` sidecar on macOS
 /// (`Contents/MacOS/corral`) and under `/usr/bin` in the Linux packages — so
-/// `current_exe`'s parent is the authoritative location. The `$PATH` fallback
-/// keeps `cargo build -p corral-app` without `-p corral-cli` working, and
-/// picks up an independently installed CLI in dev.
+/// `current_exe`'s parent is the authoritative location there. The `$PATH`
+/// fallback keeps `cargo build -p corral-app` without `-p corral-cli` working,
+/// and picks up an independently installed CLI in dev.
+///
+/// A sibling wins whenever one exists — the bundled sidecar, and for a dev
+/// build the `corral` that `just build` / `just build-release` compile into the
+/// same profile dir. When there is no sibling (a `cargo build -p corral-app`
+/// on its own), `$PATH` decides. Because the result is baked into every
+/// project's hooks as an absolute path, preferring the sibling keeps a dev
+/// instance on *its own* CLI instead of an unrelated `corral` earlier on
+/// `$PATH` (say, a symlink into another checkout).
 pub fn corral_cli_path() -> Option<PathBuf> {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
+    match std::env::current_exe() {
+        Ok(exe) => cli_for_app(exe.as_path()),
+        Err(_) => resolve_executable(CLI_BINARY_NAME),
+    }
+}
+
+/// [`corral_cli_path`] for a known app executable, split out so the
+/// sibling-vs-`$PATH` choice can be tested without moving the test binary.
+fn cli_for_app(app: &Path) -> Option<PathBuf> {
+    if let Some(dir) = app.parent()
         && let Some(path) = sibling_executable(dir, CLI_BINARY_NAME)
     {
         return Some(path);
@@ -63,10 +79,16 @@ pub fn corral_cli_path() -> Option<PathBuf> {
 /// `commands::session`), and only corral-spawned sessions can report hook
 /// status anyway.
 pub fn hook_cli_path() -> Option<PathBuf> {
-    hook_cli_for(std::env::var_os("APPIMAGE").is_some(), corral_cli_path())
+    // `APPIMAGE` is set by the AppImage runtime to the archive path. Treat an
+    // empty value as "not an AppImage" too — some launchers export the name
+    // with no value, and a bogus flag would silently downgrade hooks to the
+    // bare `corral` name.
+    let appimage = std::env::var_os("APPIMAGE").is_some_and(|value| !value.is_empty());
+    hook_cli_given(appimage, corral_cli_path())
 }
 
-fn hook_cli_for(appimage: bool, cli: Option<PathBuf>) -> Option<PathBuf> {
+/// The AppImage decision split out from the environment so it can be tested.
+fn hook_cli_given(appimage: bool, cli: Option<PathBuf>) -> Option<PathBuf> {
     if appimage { None } else { cli }
 }
 
@@ -219,15 +241,76 @@ mod tests {
     fn hook_cli_path_keeps_absolute_paths_except_in_an_appimage() {
         let cli = PathBuf::from("/Applications/Corral.app/Contents/MacOS/corral");
         assert_eq!(
-            hook_cli_for(false, Some(cli.clone())),
+            hook_cli_given(false, Some(cli.clone())),
             Some(cli.clone()),
             "normal installs should bake the absolute path"
         );
         assert_eq!(
-            hook_cli_for(true, Some(cli)),
+            hook_cli_given(true, Some(cli)),
             None,
             "an AppImage mount path changes every launch, so keep the bare name"
         );
+    }
+
+    /// Write an executable `name` into `dir` and return its path.
+    fn make_executable(dir: &Path, name: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(&path, "#!/bin/sh\n").unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+
+    #[test]
+    fn cli_for_app_prefers_a_sibling_over_path() {
+        let _guard = PATH_LOCK.lock().unwrap();
+        // The app's own directory holds a `corral` (the `just build` layout);
+        // a different `corral` comes first on `$PATH`. The sibling must win,
+        // so a dev instance stays on its own CLI.
+        let app_dir = tempfile::tempdir().unwrap();
+        let sibling = make_executable(app_dir.path(), CLI_BINARY_NAME);
+        let app = make_executable(app_dir.path(), "corral-app");
+
+        let path_dir = tempfile::tempdir().unwrap();
+        make_executable(path_dir.path(), CLI_BINARY_NAME);
+        // SAFETY: process-global, serialized by PATH_LOCK (see above).
+        unsafe {
+            std::env::set_var(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    path_dir.path().display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+        };
+
+        assert_eq!(cli_for_app(&app), Some(sibling));
+    }
+
+    #[test]
+    fn cli_for_app_falls_back_to_path_without_a_sibling() {
+        let _guard = PATH_LOCK.lock().unwrap();
+        let app_dir = tempfile::tempdir().unwrap();
+        let app = make_executable(app_dir.path(), "corral-app");
+
+        let path_dir = tempfile::tempdir().unwrap();
+        let on_path = make_executable(path_dir.path(), CLI_BINARY_NAME);
+        // SAFETY: process-global, serialized by PATH_LOCK (see above).
+        unsafe {
+            std::env::set_var(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    path_dir.path().display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+        };
+
+        assert_eq!(cli_for_app(&app), Some(on_path));
     }
 
     #[test]

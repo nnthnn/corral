@@ -111,6 +111,32 @@ jobs:
       - name: Build release bundles
         run: pnpm tauri build
 
+      # The stager (`scripts/stage-cli-sidecar.sh`) already refuses to leave
+      # the build.rs placeholder in place, but assert on the *packaged* CLI too:
+      # the placeholder would still let every bundle build successfully and only
+      # fail later, at every Claude Code status hook (exit 127). A deb is an
+      # `ar` archive of tarballs, so extract and check the installed copy.
+      - name: Verify the bundled CLI is the real executable
+        run: |
+          deb="$(ls target/release/bundle/deb/*.deb | head -n1)"
+          mkdir -p "$RUNNER_TEMP/deb"
+          dpkg-deb -x "$deb" "$RUNNER_TEMP/deb"
+          cli="$RUNNER_TEMP/deb/usr/bin/corral"
+          if [[ ! -x "$cli" ]]; then
+            echo "error: $deb does not install /usr/bin/corral" >&2
+            exit 1
+          fi
+          status=0
+          grep -qF "this bundle was built without the CLI sidecar" "$cli" || status=$?
+          if [[ "$status" -eq 0 ]]; then
+            echo "error: $cli is the build.rs placeholder" >&2
+            exit 1
+          elif [[ "$status" -ne 1 ]]; then
+            echo "error: could not read $cli to verify it" >&2
+            exit 1
+          fi
+          "$cli" --version
+
       - name: Upload Linux bundles
         uses: actions/upload-artifact@v7
         with:
