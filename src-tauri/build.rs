@@ -78,6 +78,7 @@ fn main() {
             "save_pasted_image",
             "save_text_attachment",
             "linear_search",
+            "linear_recent",
             "linear_issue",
             "open_in_zed",
             "open_terminal",

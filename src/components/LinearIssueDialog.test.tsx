@@ -16,6 +16,15 @@ const summary: LinearIssueSummary = {
   team: "Engineering",
 };
 
+const recentSummary: LinearIssueSummary = {
+  id: "uuid-2",
+  identifier: "ENG-119",
+  title: "Recently touched ticket",
+  url: "https://linear.app/acme/issue/ENG-119",
+  state: "Todo",
+  team: "Engineering",
+};
+
 const issue: LinearIssue = {
   ...summary,
   description: "Sessions expire too early.",
@@ -29,6 +38,23 @@ function openWithKey(): void {
     linearDialogOpen: true,
     settings: { ...s.settings, linear_api_key: "lin_api_test" },
   }));
+}
+
+function mockLinear(
+  opts: {
+    recent?: LinearIssueSummary[];
+    search?: LinearIssueSummary[];
+    issue?: LinearIssue;
+  } = {},
+): void {
+  vi.mocked(invoke).mockImplementation(((cmd: string) => {
+    if (cmd === "linear_recent") return Promise.resolve(opts.recent ?? []);
+    if (cmd === "linear_search") return Promise.resolve(opts.search ?? []);
+    if (cmd === "linear_issue") return Promise.resolve(opts.issue ?? issue);
+    if (cmd === "save_text_attachment")
+      return Promise.resolve("/tmp/ticket.txt");
+    return Promise.resolve(undefined);
+  }) as typeof invoke);
 }
 
 beforeEach(() => {
@@ -47,14 +73,44 @@ describe("LinearIssueDialog", () => {
     expect(useStore.getState().settingsOpen).toBe(true);
   });
 
-  it("searches as you type and attaches the chosen ticket", async () => {
-    vi.mocked(invoke).mockImplementation(((cmd: string) => {
-      if (cmd === "linear_search") return Promise.resolve([summary]);
-      if (cmd === "linear_issue") return Promise.resolve(issue);
-      if (cmd === "save_text_attachment")
-        return Promise.resolve("/tmp/ticket.txt");
-      return Promise.resolve(undefined);
-    }) as typeof invoke);
+  it("shows recently updated tickets when it opens", async () => {
+    mockLinear({ recent: [recentSummary] });
+    openWithKey();
+    render(<LinearIssueDialog />);
+
+    expect(
+      await screen.findByText("Recently touched ticket"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Recent tickets")).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("linear_recent", {
+      apiKey: "lin_api_test",
+      limit: 10,
+    });
+  });
+
+  it("replaces the recent list with search results once you type", async () => {
+    mockLinear({ recent: [recentSummary], search: [summary] });
+    openWithKey();
+    render(<LinearIssueDialog />);
+    await screen.findByText("Recently touched ticket");
+
+    fireEvent.change(screen.getByPlaceholderText(/Issue ID \(ENG-123\)/), {
+      target: { value: "login" },
+    });
+
+    expect(await screen.findByText("Fix login timeout")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Recently touched ticket"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Recent tickets")).not.toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("linear_search", {
+      apiKey: "lin_api_test",
+      query: "login",
+    });
+  });
+
+  it("attaches the chosen ticket and closes", async () => {
+    mockLinear({ search: [summary] });
     const insertToActive = vi.fn(() => true);
     useStore.setState({ sessionMgr: { insertToActive } as never });
     openWithKey();
@@ -63,14 +119,7 @@ describe("LinearIssueDialog", () => {
     fireEvent.change(screen.getByPlaceholderText(/Issue ID \(ENG-123\)/), {
       target: { value: "login" },
     });
-
-    const row = await screen.findByText("Fix login timeout");
-    expect(invoke).toHaveBeenCalledWith("linear_search", {
-      apiKey: "lin_api_test",
-      query: "login",
-    });
-
-    fireEvent.click(row);
+    fireEvent.click(await screen.findByText("Fix login timeout"));
 
     await vi.waitFor(() =>
       expect(insertToActive).toHaveBeenCalledWith(
@@ -88,13 +137,7 @@ describe("LinearIssueDialog", () => {
   });
 
   it("selects a result with the keyboard", async () => {
-    vi.mocked(invoke).mockImplementation(((cmd: string) => {
-      if (cmd === "linear_search") return Promise.resolve([summary]);
-      if (cmd === "linear_issue") return Promise.resolve(issue);
-      if (cmd === "save_text_attachment")
-        return Promise.resolve("/tmp/ticket.txt");
-      return Promise.resolve(undefined);
-    }) as typeof invoke);
+    mockLinear({ search: [summary] });
     const insertToActive = vi.fn(() => true);
     useStore.setState({ sessionMgr: { insertToActive } as never });
     openWithKey();
@@ -106,5 +149,19 @@ describe("LinearIssueDialog", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     await vi.waitFor(() => expect(insertToActive).toHaveBeenCalled());
+  });
+
+  it("dismisses when the backdrop is clicked, but not when the dialog content is", async () => {
+    mockLinear({ recent: [recentSummary] });
+    openWithKey();
+    render(<LinearIssueDialog />);
+    const dialog = screen.getByRole("dialog");
+    await screen.findByText("Recently touched ticket");
+
+    fireEvent.mouseDown(screen.getByPlaceholderText(/Issue ID \(ENG-123\)/));
+    expect(useStore.getState().linearDialogOpen).toBe(true);
+
+    fireEvent.mouseDown(dialog);
+    expect(useStore.getState().linearDialogOpen).toBe(false);
   });
 });

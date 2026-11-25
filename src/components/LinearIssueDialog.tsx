@@ -11,6 +11,8 @@ import { Button } from "./Button";
 /** Wait this long after the last keystroke before hitting Linear — one
  * request per word typed would be rude to the API and the rate limit. */
 const SEARCH_DEBOUNCE_MS = 350;
+/** How many recently-updated tickets the empty-state list shows. */
+const RECENT_LIMIT = 10;
 
 function close(): void {
   useStore.setState({ linearDialogOpen: false });
@@ -22,73 +24,116 @@ function openSettings(): void {
 
 /** Type-ahead picker for the "Attach Linear ticket" action: search Linear,
  * choose an issue, and insert a reference to its full body into the active
- * agent session. Native `<dialog>` for the same focus/backdrop behavior every
- * other corral dialog gets (see `useDialogRef`). */
+ * agent session. Opens on a list of recently-updated tickets so the common
+ * case (grab the ticket I'm working on) needs no typing. Native `<dialog>`
+ * for the same focus/backdrop behavior every other corral dialog gets (see
+ * `useDialogRef`). */
 export function LinearIssueDialog() {
   const open = useStore((s) => s.linearDialogOpen);
   const apiKey = useStore((s) => s.settings.linear_api_key.trim());
   const ref = useDialogRef(open);
 
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<LinearIssueSummary[]>([]);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [recent, setRecent] = useState<LinearIssueSummary[]>([]);
+  const [recentLoading, setRecentLoading] = useState(false);
+  const [recentError, setRecentError] = useState<string | null>(null);
+  const [searchResults, setSearchResults] = useState<LinearIssueSummary[]>([]);
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
   const [attaching, setAttaching] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   // Bumped on every request; stale responses (out-of-order, or from before
   // the query changed) compare unequal and are dropped.
-  const requestRef = useRef(0);
+  const searchRequestRef = useRef(0);
+  const recentRequestRef = useRef(0);
 
   // Reset everything each time the picker opens.
   useEffect(() => {
     if (!open) return;
-    requestRef.current += 1;
+    searchRequestRef.current += 1;
+    recentRequestRef.current += 1;
     setQuery("");
-    setResults([]);
-    setActiveIndex(0);
+    setRecent([]);
+    setRecentLoading(false);
+    setRecentError(null);
+    setSearchResults([]);
     setSearching(false);
+    setSearchError(null);
+    setActiveIndex(0);
     setAttaching(null);
-    setError(null);
     requestAnimationFrame(() => inputRef.current?.focus());
   }, [open]);
 
+  // The empty-search default list: recently updated tickets.
+  useEffect(() => {
+    if (!open || !apiKey) return;
+    const token = ++recentRequestRef.current;
+    setRecentLoading(true);
+    setRecentError(null);
+    invoke("linear_recent", { apiKey, limit: RECENT_LIMIT })
+      .then((rows) => {
+        if (token !== recentRequestRef.current) return;
+        setRecent(rows);
+        setActiveIndex(0);
+      })
+      .catch((err) => {
+        if (token !== recentRequestRef.current) return;
+        setRecent([]);
+        setRecentError(String(err));
+      })
+      .finally(() => {
+        if (token === recentRequestRef.current) setRecentLoading(false);
+      });
+  }, [open, apiKey]);
+
+  // Debounced search once the query is long enough to be useful. Shorter
+  // queries fall back to the recent list loaded above.
   useEffect(() => {
     if (!open || !apiKey) return;
     const term = query.trim();
     if (term.length < 2) {
-      requestRef.current += 1;
-      setResults([]);
+      searchRequestRef.current += 1;
+      setSearchResults([]);
       setSearching(false);
-      setError(null);
+      setSearchError(null);
       return;
     }
-    const token = ++requestRef.current;
+    const token = ++searchRequestRef.current;
     setSearching(true);
     const timer = window.setTimeout(() => {
       invoke("linear_search", { apiKey, query: term })
         .then((rows) => {
-          if (token !== requestRef.current) return;
-          setResults(rows);
+          if (token !== searchRequestRef.current) return;
+          setSearchResults(rows);
           setActiveIndex(0);
-          setError(null);
+          setSearchError(null);
         })
         .catch((err) => {
-          if (token !== requestRef.current) return;
-          setResults([]);
-          setError(String(err));
+          if (token !== searchRequestRef.current) return;
+          setSearchResults([]);
+          setSearchError(String(err));
         })
         .finally(() => {
-          if (token === requestRef.current) setSearching(false);
+          if (token === searchRequestRef.current) setSearching(false);
         });
     }, SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [open, apiKey, query]);
 
+  const term = query.trim();
+  // Two characters is the search threshold (Linear's search term is useless
+  // below that); until then the dialog shows recent tickets.
+  const isSearchMode = term.length >= 2;
+  const results = isSearchMode ? searchResults : recent;
+  const loading = isSearchMode ? searching : recentLoading;
+  const error = isSearchMode ? searchError : recentError;
+
   async function select(summary: LinearIssueSummary): Promise<void> {
     if (attaching) return;
     setAttaching(summary.id);
-    setError(null);
+    if (isSearchMode) setSearchError(null);
+    else setRecentError(null);
     try {
       const issue = await invoke("linear_issue", {
         apiKey,
@@ -96,7 +141,8 @@ export function LinearIssueDialog() {
       });
       if (await attachIssueToAgent(issue)) close();
     } catch (err) {
-      setError(String(err));
+      if (isSearchMode) setSearchError(String(err));
+      else setRecentError(String(err));
     } finally {
       setAttaching(null);
     }
@@ -116,10 +162,17 @@ export function LinearIssueDialog() {
     }
   }
 
-  const term = query.trim();
-
   return (
-    <dialog ref={ref} id="linear-issue-dialog" onClose={close}>
+    <dialog
+      ref={ref}
+      id="linear-issue-dialog"
+      onClose={close}
+      // A click on the ::backdrop targets the dialog element itself, never
+      // one of its children — the standard native-dialog click-outside test.
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) close();
+      }}
+    >
       {!apiKey ? (
         <div className="flex flex-col gap-3 p-5">
           <h2 className="flex items-center gap-2">
@@ -156,7 +209,7 @@ export function LinearIssueDialog() {
               }}
               onKeyDown={onKeyDown}
             />
-            {searching && (
+            {loading && (
               <Loader2 size={14} className="shrink-0 animate-spin text-muted" />
             )}
           </div>
@@ -166,11 +219,18 @@ export function LinearIssueDialog() {
             )}
             {!error && results.length === 0 && (
               <li className="px-2 py-2 text-sub text-muted">
-                {term.length < 2
-                  ? "Type at least two characters to search."
-                  : searching
+                {isSearchMode
+                  ? searching
                     ? "Searching…"
-                    : "No matching issues."}
+                    : "No matching issues."
+                  : recentLoading
+                    ? "Loading recent tickets…"
+                    : "No recent tickets. Type at least two characters to search."}
+              </li>
+            )}
+            {!error && !isSearchMode && results.length > 0 && (
+              <li className="px-2 py-1 text-label text-muted">
+                Recent tickets
               </li>
             )}
             {results.map((issue, i) => {

@@ -207,6 +207,7 @@ pub fn run() {
             commands::system::save_pasted_image,
             commands::system::save_text_attachment,
             commands::linear::linear_search,
+            commands::linear::linear_recent,
             commands::linear::linear_issue,
             commands::system::open_in_zed,
             commands::system::open_terminal,

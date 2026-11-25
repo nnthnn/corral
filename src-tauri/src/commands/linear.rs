@@ -1,6 +1,6 @@
 //! Linear ticket lookup for the "Attach Linear ticket" action.
 //!
-//! Both commands are `async` + `spawn_blocking` for the same reason as
+//! All commands are `async` + `spawn_blocking` for the same reason as
 //! `worktrees::check_log`: `ureq` is synchronous and these are real network
 //! calls, so running them inline on the IPC thread would freeze the UI for
 //! the duration of the request.
@@ -16,6 +16,20 @@ pub async fn linear_search(
 ) -> Result<Vec<corral_core::linear::LinearIssueSummary>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         corral_core::linear::search(&api_key, &query, limit.unwrap_or(20))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .str_err()
+}
+
+/// Recently updated issues, for the dialog's default list. Read-only.
+#[tauri::command]
+pub async fn linear_recent(
+    api_key: String,
+    limit: Option<u32>,
+) -> Result<Vec<corral_core::linear::LinearIssueSummary>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        corral_core::linear::recent(&api_key, limit.unwrap_or(10))
     })
     .await
     .map_err(|e| e.to_string())?

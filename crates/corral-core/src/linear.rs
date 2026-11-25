@@ -74,6 +74,25 @@ query CorralSearchIssues($term: String!, $first: Int!) {
 }
 "#;
 
+/// The dialog's default list: recently updated issues, newest first. No
+/// assignee filter — a single-user workspace wants everything, and a team
+/// workspace benefits from seeing recent activity even on tickets that aren't
+/// assigned to the viewer.
+const RECENT_QUERY: &str = r#"
+query CorralRecentIssues($first: Int!) {
+  issues(first: $first, orderBy: updatedAt) {
+    nodes {
+      id
+      identifier
+      title
+      url
+      state { name }
+      team { name }
+    }
+  }
+}
+"#;
+
 const ISSUE_QUERY: &str = r#"
 query CorralIssue($id: String!) {
   issue(id: $id) {
@@ -138,6 +157,15 @@ fn parse_summary(node: &Value) -> Option<LinearIssueSummary> {
         state: str_at(node, "/state/name"),
         team: str_at(node, "/team/name"),
     })
+}
+
+/// Parse an `IssueConnection`'s `nodes` array at `pointer` into summaries,
+/// dropping malformed entries. Shared by search and the recent list.
+fn summaries_at(body: &Value, pointer: &str) -> Vec<LinearIssueSummary> {
+    body.pointer(pointer)
+        .and_then(Value::as_array)
+        .map(|nodes| nodes.iter().filter_map(parse_summary).collect())
+        .unwrap_or_default()
 }
 
 fn parse_issue(node: &Value) -> Option<LinearIssue> {
@@ -254,11 +282,15 @@ pub fn search(api_key: &str, query: &str, limit: u32) -> Result<Vec<LinearIssueS
         SEARCH_QUERY,
         json!({ "term": query, "first": limit.clamp(1, 50) }),
     )?;
-    Ok(body
-        .pointer("/data/searchIssues/nodes")
-        .and_then(Value::as_array)
-        .map(|nodes| nodes.iter().filter_map(parse_summary).collect())
-        .unwrap_or_default())
+    Ok(summaries_at(&body, "/data/searchIssues/nodes"))
+}
+
+/// Recently updated issues, newest first — the dialog's default list when the
+/// search field is empty.
+pub fn recent(api_key: &str, limit: u32) -> Result<Vec<LinearIssueSummary>> {
+    let key = require_key(api_key)?;
+    let body = graphql(key, RECENT_QUERY, json!({ "first": limit.clamp(1, 50) }))?;
+    Ok(summaries_at(&body, "/data/issues/nodes"))
 }
 
 #[cfg(test)]
@@ -293,6 +325,22 @@ mod tests {
         assert_eq!(summary.identifier, "ENG-123");
         assert_eq!(summary.state.as_deref(), Some("In Progress"));
         assert_eq!(summary.team.as_deref(), Some("Engineering"));
+    }
+
+    #[test]
+    fn parses_connection_nodes_and_skips_malformed_entries() {
+        let body: Value = serde_json::from_str(
+            r#"{"data":{"issues":{"nodes":[
+                {"id":"u1","identifier":"ENG-1","title":"One","state":{"name":"Todo"}},
+                {"id":"u2","title":"Missing identifier"},
+                {"id":"u3","identifier":"ENG-3","title":"Three"}
+            ]}}}"#,
+        )
+        .unwrap();
+        let rows = summaries_at(&body, "/data/issues/nodes");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].identifier, "ENG-1");
+        assert_eq!(rows[1].identifier, "ENG-3");
     }
 
     #[test]
@@ -347,6 +395,8 @@ mod tests {
         let err = search("  ", "ENG-123", 20).unwrap_err().to_string();
         assert!(err.contains("No Linear API key"), "{err}");
         let err = issue("", "ENG-123").unwrap_err().to_string();
+        assert!(err.contains("No Linear API key"), "{err}");
+        let err = recent("", 10).unwrap_err().to_string();
         assert!(err.contains("No Linear API key"), "{err}");
     }
 

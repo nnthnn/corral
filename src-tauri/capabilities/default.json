@@ -51,6 +51,7 @@
     "allow-save-pasted-image",
     "allow-save-text-attachment",
     "allow-linear-search",
+    "allow-linear-recent",
     "allow-linear-issue",
     "allow-open-in-zed",
     "allow-open-terminal",

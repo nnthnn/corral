@@ -192,6 +192,10 @@ interface CommandMap {
     args: { apiKey: string; query: string; limit?: number };
     result: LinearIssueSummary[];
   };
+  linear_recent: {
+    args: { apiKey: string; limit?: number };
+    result: LinearIssueSummary[];
+  };
   linear_issue: { args: { apiKey: string; id: string }; result: LinearIssue };
   open_in_zed: {
     args: { path: string; editorCommand: string };
