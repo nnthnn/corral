@@ -14,13 +14,35 @@ fn git_sha() -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// `bundle.externalBin` makes `tauri-build` copy the CLI sidecar next to the
+/// compiled binary and **fail when it is missing** — even for a plain
+/// `cargo check`, which is part of `just ci`. The real sidecar is only staged
+/// by `scripts/stage-cli-sidecar.sh` (via `build.beforeBundleCommand`), so a
+/// fresh checkout has none.
+///
+/// Rather than writing a stub into `src-tauri/binaries/` — which then gets
+/// copied next to a dev `corral-app`, where `bin::corral_cli_path` prefers it
+/// as a sibling over a real CLI on `$PATH` — print the file that's expected and
+/// let the build fail. Both supported paths avoid this entirely:
+/// `just check` / `just build` set `TAURI_CONFIG` to an empty `externalBin`,
+/// and `just bundle` stages the real CLI first.
+fn with_sidecar_hint(err: tauri_build::Result<()>) -> tauri_build::Result<()> {
+    let triple = std::env::var("TARGET").unwrap_or_else(|_| "<target-triple>".into());
+    err.map_err(|err| {
+        err.context(format!(
+            "the `corral` CLI sidecar is missing: expected src-tauri/binaries/corral-{triple}. \
+             `just bundle` stages it; `just check` / `just build` skip the copy."
+        ))
+    })
+}
+
 fn main() {
     println!("cargo:rustc-env=CORRAL_GIT_SHA={}", git_sha());
     println!("cargo:rerun-if-changed=../.git/HEAD");
     println!("cargo:rerun-if-changed=../.git/index");
 
-    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
-        tauri_build::AppManifest::new().commands(&[
+    with_sidecar_hint(tauri_build::try_build(
+        tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
             "notify_icon",
             "send_notification",
             "home_dir",
@@ -88,7 +110,7 @@ fn main() {
             "browser_go_forward",
             "browser_reload",
             "browser_refresh_titles",
-        ]),
+        ])),
     ))
     .expect("failed to run tauri-build");
 }

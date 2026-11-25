@@ -5,7 +5,16 @@ default:
 frontend:
     pnpm build
 
-# Compile-check the whole Rust workspace
+# `bundle.externalBin` makes tauri-build copy the CLI sidecar next to the binary
+# at compile time, and *fail* when it is missing — so a fresh checkout can't
+# even `cargo check` until `just bundle` has staged one. Exporting an emptied
+# `externalBin` for every recipe here skips that copy (build.rs adds a hint to
+# the leftover error), and `build` / `build-release` compile the CLI into the
+# same profile dir so `bin::corral_cli_path` finds the real thing as a sibling.
+no-sidecar := '{"bundle":{"externalBin":[]}}'
+export TAURI_CONFIG := no-sidecar
+
+# Compile-check the whole Rust workspace (no sidecar needed)
 check:
     cargo check --workspace
 
@@ -52,7 +61,9 @@ install-hooks:
     git config core.hooksPath .githooks
     chmod +x .githooks/*
 
-# Build a real standalone binary fast, skipping the tauri-cli bundler (see CLAUDE.md)
+# Build a real standalone binary fast, skipping the tauri-cli bundler (see CLAUDE.md).
+# The CLI is built into the same profile dir, so `bin::corral_cli_path` finds it
+# as a sibling of `corral-app` (which is what the session PATH relies on).
 build: frontend
     cargo build -p corral-app --features tauri/custom-protocol
     cargo build -p corral-cli
@@ -62,11 +73,28 @@ build-release: frontend
     cargo build -p corral-app --release --features tauri/custom-protocol
     cargo build --release -p corral-cli
 
-# Full release build + .deb/.rpm/.AppImage bundling via tauri-cli — slow.
-# Builds the CLI first; the bundles ship it as /usr/bin/corral.
+# Full release build + platform bundling via tauri-cli — slow.
+# `build.beforeBundleCommand` (scripts/stage-cli-sidecar.sh) builds the CLI for
+# the target triple and stages it as a Tauri sidecar: Contents/MacOS/corral in
+# the .app and /usr/bin/corral in the .deb / .rpm / .AppImage.
 bundle:
-    cargo build --release -p corral-cli
     pnpm tauri build
+
+# Universal (arm64 + x86_64) macOS .dmg, for the rare Intel Mac still running a
+# supported macOS. Not the release default — `bundle` produces a host-arch dmg
+# (arm64 on Apple Silicon).
+#
+# Both the app and the CLI must be fat: a universal app with an arm64-only
+# `corral` inside still launches under Rosetta and then fails every hook with
+# "bad CPU type in executable". The staging script lipos the CLI; the `lipo`
+# check below verifies every nested executable.
+universal:
+    rustup target add aarch64-apple-darwin x86_64-apple-darwin
+    pnpm tauri build --target universal-apple-darwin
+    @echo "=== architectures per executable (want x86_64 arm64 for each) ==="
+    @find target/universal-apple-darwin/release/bundle/macos/Corral.app -type f -perm +111 -print -exec lipo -archs {} \;
+    @echo "=== dmg ==="
+    @ls -lh target/universal-apple-darwin/release/bundle/dmg/*.dmg
 
 # Build and run the standalone debug binary
 run: build

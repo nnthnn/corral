@@ -609,20 +609,49 @@ pub async fn start_session(
         return Err(format!("worktree path does not exist: {}", path.display()));
     }
 
-    // `.claude/settings.local.json` is symlinked from every worktree back to
-    // the main repo (`worktree::link_claude_dir`), so this is written once
-    // per project and is safe to call on every session start — it's a
-    // no-op once the hooks are already present (see `hooks::merge_hooks`).
-    let repo_claude_settings = config::repo_path(&project)
-        .str_err()?
-        .join(".claude")
-        .join("settings.local.json");
-    if let Err(e) = corral_core::hooks::ensure_hooks_installed(&repo_claude_settings) {
-        tracing::warn!("start_session: failed to install status hooks: {e}");
-    }
-
     let settings = corral_core::settings::load().str_err()?;
     let project_settings = corral_core::project_settings::get(&project).str_err()?;
+
+    // Claude Code's status hooks live in the repo's
+    // `.claude/settings.local.json` only while Claude is the harness in use.
+    // OpenCode and Pi never run them, so switching to one *removes* them
+    // rather than leaving an absolute `corral notify-hook …` path (stale as
+    // soon as the app moves) in the user's repo for no benefit. A harness value
+    // from a newer corral (`Unknown`) is left alone: it fails further down
+    // without launching anything, so there's no run to configure for.
+    //
+    // `.claude/settings.local.json` is symlinked from every worktree back to
+    // the main repo (`worktree::link_claude_dir`), so this is written once per
+    // project and is safe to call on every session start — it's a no-op once
+    // the hooks are already present, and replaces a stale CLI path when the app
+    // moved or switched between dev and bundled builds (see
+    // `hooks::merge_hooks`).
+    //
+    // The CLI path is absolute on normal installs because the hook runs in
+    // Claude's shell, which on macOS never has the app bundle's
+    // `Contents/MacOS` on `PATH`. An AppImage keeps the bare `corral` name
+    // (its mount path changes every launch); see `bin::hook_cli_path`.
+    let cli_path = corral_core::bin::hook_cli_path();
+    let hook_cli = match settings.harness {
+        corral_core::harness::Harness::Opencode
+        | corral_core::harness::Harness::Opencode2
+        | corral_core::harness::Harness::Pi => Some(corral_core::hooks::HookCli::Remove),
+        corral_core::harness::Harness::Claude => Some(match cli_path.as_deref() {
+            Some(cli) => corral_core::hooks::HookCli::Absolute(cli),
+            None => corral_core::hooks::HookCli::Name,
+        }),
+        corral_core::harness::Harness::Unknown(_) => None,
+    };
+    if let Some(hook_cli) = hook_cli {
+        let repo_claude_settings = config::repo_path(&project)
+            .str_err()?
+            .join(".claude")
+            .join("settings.local.json");
+        if let Err(e) = corral_core::hooks::ensure_hooks_installed(&repo_claude_settings, hook_cli)
+        {
+            tracing::warn!("start_session: failed to update status hooks: {e}");
+        }
+    }
 
     // A non-empty saved title means this worktree was already named (via
     // `corral rename`, by this or a previous session). Passed to the
@@ -1058,8 +1087,31 @@ pub async fn start_session(
         // before the internal vars below so the hook socket / session id /
         // TERM / marker / password and the denylist strip all take precedence
         // over them.
-        for (key, value) in project_settings.env_vars() {
+        let project_env: Vec<(&str, &str)> = project_settings.env_vars().collect();
+        for (key, value) in &project_env {
             cmd.env(key, value);
+        }
+        // Put the CLI bundled with this app install on the agent's PATH, so
+        // `corral rename/list/done/awake` (the onboarding prompt tells agents
+        // to run these) resolve from inside the session's shell. The hook
+        // itself uses an absolute path — see `bin::hook_cli_path` — but this
+        // also covers the AppImage case, where no stable absolute path exists.
+        //
+        // Prepended *after* the project's env vars so a project-configured
+        // PATH (nvm, a toolchain shim, …) stays the base instead of being
+        // clobbered.
+        if let Some(cli) = corral_core::bin::corral_cli_path()
+            && let Some(dir) = cli.parent()
+        {
+            let project_path = project_env
+                .iter()
+                .filter(|(key, _)| *key == "PATH")
+                .map(|(_, value)| value.to_string())
+                .next_back();
+            let base = project_path
+                .or_else(|| std::env::var("PATH").ok())
+                .unwrap_or_default();
+            cmd.env("PATH", corral_core::bin::prepend_to_path(dir, &base));
         }
         cmd.env("TERM", "xterm-256color");
         cmd.env(

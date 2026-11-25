@@ -44,19 +44,40 @@ branch diffs](docs/assets/corral-demo.gif)
 Download the latest `.deb`, `.rpm`, or `.AppImage` (Linux) from the
 [Releases](https://github.com/nnthnn/corral/releases) page.
 
-macOS builds (`.dmg`, universal binary) are attached by hand when there is one
-— they aren't produced by the release workflow, because macOS CI runners are
-the one standard runner GitHub doesn't make free on a public repo. Those builds
-are unsigned unless signed with the relevant secrets, so the first launch may
-need **right-click → Open** to get past Gatekeeper.
+macOS builds (`.dmg`, arm64) are attached by hand when there is one — they
+aren't produced by the release workflow, because macOS CI runners are the one
+standard runner GitHub doesn't make free on a public repo. Those builds are
+unsigned unless signed with the relevant secrets, so the first launch may need
+**right-click → Open** to get past Gatekeeper.
 
 Build one yourself from a checkout on a Mac:
 
 ```sh
 pnpm install
-pnpm tauri build --target universal-apple-darwin
-# target/universal-apple-darwin/release/bundle/dmg/*.dmg
+just bundle
+# target/release/bundle/dmg/*.dmg
 ```
+
+The default build is host-arch (arm64 on Apple Silicon), and its dmg lands in
+`target/release/bundle/dmg/`. For an Intel Mac, use `just universal` — it
+produces a fat app **and** a fat bundled CLI, which is required: a universal app
+with an arm64-only CLI still launches under Rosetta and then fails every status
+hook with `bad CPU type in executable`. A universal build uses a different
+target directory, so its dmg is at
+`target/universal-apple-darwin/release/bundle/dmg/` (the recipe prints the
+path). `just universal` also runs `lipo -archs` over every nested executable so
+you can confirm each one is `x86_64 arm64`.
+
+The `.dmg` ships the `corral` CLI inside the app at
+`Corral.app/Contents/MacOS/corral`. Agents launched by corral get it on their
+PATH automatically; to use it from your own shell:
+
+```sh
+sudo mkdir -p /usr/local/bin
+sudo ln -sf /Applications/Corral.app/Contents/MacOS/corral /usr/local/bin/corral
+```
+
+Re-run the symlink if you move the app.
 
 On macOS, corral reads your login shell's environment once at startup — the
 same way Terminal.app does — so Homebrew/nvm/pnpm binaries and anything you
@@ -138,7 +159,9 @@ cargo install --path crates/corral-cli
 
 The `.deb` and `.rpm` release bundles also ship it as `/usr/bin/corral`
 (the AppImage contains it at `usr/bin/corral`, but AppImages don't put
-anything on your PATH).
+anything on your PATH). The macOS `.dmg` ships it at
+`Corral.app/Contents/MacOS/corral` — see the Install note above for the
+`/usr/local/bin` symlink.
 
 ## Status
 

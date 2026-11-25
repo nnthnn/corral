@@ -47,7 +47,7 @@ corral/
 │   │   │                           #   (+ BROWSER_INSTRUCTIONS for OpenCode browser tools)
 │   │   ├── names.rs                # auto-picked placeholder feature names
 │   │   ├── settings.rs             # user app preferences (disk-persisted)
-│   │   ├── bin.rs                  # resolve/validate agent CLI executables on PATH
+│   │   ├── bin.rs                  # resolve agent CLIs on PATH + the bundled `corral` CLI
 │   │   ├── process.rs              # sum RSS across the process tree (from /proc)
 │   │   ├── natural.rs              # numeric-aware string ordering
 │   │   ├── json_store.rs           # shared JSON-blob-on-disk primitives
@@ -57,6 +57,8 @@ corral/
 │   │   └── error.rs
 │   └── corral-cli/                # `corral` binary (clap): new / list / open / done /
 │                                   #   rename / config / project add / awake / notify-hook
+│                                   #   (shipped as a Tauri externalBin sidecar)
+├── scripts/                       # build/test helpers, e.g. stage-cli-sidecar.sh
 ├── src-tauri/                     # Tauri v2 app
 │   ├── src/lib.rs                  # bootstrap: command surface + window/localhost-plugin setup
 │   ├── src/commands/                # command surface, split by domain
@@ -213,20 +215,27 @@ takes the whole run down to `cancelled` and stops Linux publishing, since
 ```fish
 # On a Mac, from the tagged checkout:
 pnpm install
-just bundle                      # or: pnpm tauri build --target universal-apple-darwin
-gh release upload vX.Y.Z \
-    target/universal-apple-darwin/release/bundle/dmg/*.dmg
+just bundle                      # host arch — arm64 on Apple Silicon
+gh release upload vX.Y.Z target/release/bundle/dmg/*.dmg
 ```
 
-Alternatively, run the Release workflow by hand with `build_macos` ticked
-(Actions → Release → Run workflow) and attach the resulting
-`macos-bundles` artifact to the release. That job is `continue-on-error` and
-opt-in, so it can never block or cancel a Linux release.
+The released `.dmg` is **arm64**, not universal: Apple stopped selling Intel
+Macs in 2023. An arm64-only app fails loudly on an Intel Mac (it won't launch),
+which is preferable to a universal app with a thin CLI — that launches under
+Rosetta and then silently loses every hook-driven feature (`bad CPU type in
+executable`). An Intel user can build a fully fat dmg with `just universal`,
+which lipos both the app and the bundled CLI and prints `lipo -archs` for every
+nested executable.
 
-macOS signing + notarization is still opt-in via repository secrets
-(`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`,
-`APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`); with none configured the dmg is
-unsigned and needs Gatekeeper's right-click → Open on first launch.
+There is no macOS job in the release workflow at all — the `.dmg` is always a
+manual build on a Mac. macOS signing + notarization is opt-in via repository
+secrets (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
+`APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`); for a
+local `just bundle` they're read from the environment, and with none set the
+dmg is unsigned and needs Gatekeeper's right-click → Open on first launch.
+Because the dmg is only built locally, nothing in CI packages the macOS
+sidecar — if `stage-cli-sidecar.sh` or `build.rs` breaks only on macOS, the
+manual build is where it shows up.
 
 There is deliberately **no macOS job in `ci.yml`**: it would never run, and a
 green check that silently means "macOS was never compiled" is worse than none.
@@ -303,6 +312,40 @@ on a Mac — keep that in mind when touching `process.rs`, `caffeinate.rs`, or
   swap this for `fix-path-env`'s `fix_all_vars()`, which overwrites
   `CORRAL_CONFIG_DIR` and friends. Only wired up on macOS; Linux `.desktop`
   launches have the same gap and could enable the same call.
+- **The `corral` CLI ships as a Tauri sidecar, and hooks reference it by
+  absolute path.** `bundle.externalBin` plus
+  `scripts/stage-cli-sidecar.sh` (run by `build.beforeBundleCommand`) stage
+  `src-tauri/binaries/corral-<target-triple>`; the bundler copies it to
+  `Contents/MacOS/corral` in the `.app` (and signs it with the app) and to
+  `/usr/bin/corral` in the Linux packages. `tauri-build` requires the sidecar
+  to exist at **compile** time and errors out when it is missing, so plain
+  `cargo check` in a fresh checkout fails before the bundler runs — the
+  `justfile` therefore exports `TAURI_CONFIG` with `bundle.externalBin` emptied
+  for `just check` / `just build` (which also build the CLI into the same
+  profile dir, so `corral_cli_path` finds it as a sibling). Never work around
+  this by writing a stub into `src-tauri/binaries/`: `tauri-build` would copy it
+  next to a dev `corral-app`, where the sibling rule prefers it over a real CLI
+  and every `corral` call exits 127. Do **not** switch
+  this to `bundle.macos.files`: Tauri copies those under `Contents/` but does not add
+  them to its signing list, so a nested Mach-O stays unsigned and breaks
+  notarization/`codesign --verify`. `bin::corral_cli_path()` resolves the
+  executable as a sibling of `current_exe` (dev `target/debug/corral`, bundled
+  `Contents/MacOS/corral`, `/usr/bin/corral`), falling back to `$PATH`;
+  `start_session` bakes that absolute path into Claude hook commands (the hook
+  shell on macOS never has the bundle dir on `PATH`) — but only while Claude is
+  the harness; switching to OpenCode/Pi removes them again
+  (`hooks::HookCli::Remove`) — and prepends its directory
+  to the agent PTY's `PATH` so `corral rename/list/done/awake` work.
+  `bin::hook_cli_path()` returns `None` inside an AppImage, whose mount path
+  changes every launch, and `merge_hooks` replaces a stale managed entry rather
+  than accumulating another. Don't use `resource_dir()`/
+  `Contents/Resources` for this — sidecars live in `Contents/MacOS`.
+- **`just bundle` builds the CLI itself now.** The freedesktop packages used to
+  need a separate `cargo build -p corral-cli` before `pnpm tauri build`
+  (`bundle.linux.*.files` pointed at `target/release/corral`). The
+  before-bundle hook stages the sidecar for the actual target triple, so a
+  universal build gets `corral-universal-apple-darwin` automatically. Keep
+  `just build`'s CLI build: a dev `just run` needs `target/debug/corral`.
 - **Bundled builds need webkit2gtk workarounds on this system (CachyOS
   rolling release, `webkit2gtk-4.1 2.52.x`).** Two separate upstream bugs,
   both worked around, both required to get past a blank white

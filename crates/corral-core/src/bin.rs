@@ -29,22 +29,149 @@ pub fn resolve_executable(bin: &str) -> Option<PathBuf> {
     None
 }
 
-/// A string that looks like a path rather than a bare command name — anything
-/// with a separator, or a leading `.`/`/`/`~`. `Command` treats these the
-/// same way (a `PATH` search only happens for names without separators).
-fn is_path(bin: &str) -> bool {
-    bin.contains(std::path::MAIN_SEPARATOR)
-        || bin.starts_with('.')
-        || bin.starts_with('/')
-        || bin.starts_with('~')
+/// Name of the CLI binary corral bundles next to the desktop app. It's the
+/// `[[bin]]` name from `crates/corral-cli`, so the same name works for a dev
+/// build (`target/debug/corral`), a Linux package (`/usr/bin/corral`), and a
+/// macOS bundle (`Corral.app/Contents/MacOS/corral`).
+const CLI_BINARY_NAME: &str = "corral";
+
+/// Resolve the `corral` CLI that belongs to this app install, preferring the
+/// binary bundled alongside the running app over anything already on `$PATH`.
+///
+/// The app and CLI ship together — as a Tauri `externalBin` sidecar on macOS
+/// (`Contents/MacOS/corral`) and under `/usr/bin` in the Linux packages — so
+/// `current_exe`'s parent is the authoritative location there. The `$PATH`
+/// fallback keeps `cargo build -p corral-app` without `-p corral-cli` working,
+/// and picks up an independently installed CLI in dev.
+///
+/// A sibling wins whenever one exists — the bundled sidecar, and for a dev
+/// build the `corral` that `just build` / `just build-release` compile into the
+/// same profile dir. When there is no sibling (a `cargo build -p corral-app`
+/// on its own), `$PATH` decides. Because the result is baked into every
+/// project's hooks as an absolute path, preferring the sibling keeps a dev
+/// instance on *its own* CLI instead of an unrelated `corral` earlier on
+/// `$PATH` (say, a symlink into another checkout).
+pub fn corral_cli_path() -> Option<PathBuf> {
+    match std::env::current_exe() {
+        Ok(exe) => cli_for_app(exe.as_path()),
+        Err(_) => resolve_executable(CLI_BINARY_NAME),
+    }
 }
 
-fn exists_and_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
+/// [`corral_cli_path`] for a known app executable, split out so the
+/// sibling-vs-`$PATH` choice can be tested without moving the test binary.
+fn cli_for_app(app: &Path) -> Option<PathBuf> {
+    if let Some(dir) = app.parent()
+        && let Some(path) = sibling_executable(dir, CLI_BINARY_NAME)
+    {
+        return Some(path);
+    }
+    resolve_executable(CLI_BINARY_NAME)
+}
 
-    std::fs::metadata(path)
-        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
+/// Path to bake into Claude Code's hook commands, or `None` to keep the bare
+/// `corral` name.
+///
+/// An AppImage is mounted at a fresh `/tmp/.mount_*` path on every launch, so
+/// an absolute path written into a project's `.claude/settings.local.json`
+/// would go stale immediately. In that case the bare name is better — the
+/// session PTY gets the mounted CLI directory prepended to `PATH` (see
+/// `commands::session`), and only corral-spawned sessions can report hook
+/// status anyway.
+pub fn hook_cli_path() -> Option<PathBuf> {
+    // `APPIMAGE` is set by the AppImage runtime to the archive path. Treat an
+    // empty value as "not an AppImage" too — some launchers export the name
+    // with no value, and a bogus flag would silently downgrade hooks to the
+    // bare `corral` name.
+    let appimage = std::env::var_os("APPIMAGE").is_some_and(|value| !value.is_empty());
+    hook_cli_given(appimage, corral_cli_path())
+}
+
+/// The AppImage decision split out from the environment so it can be tested.
+fn hook_cli_given(appimage: bool, cli: Option<PathBuf>) -> Option<PathBuf> {
+    if appimage { None } else { cli }
+}
+
+/// The `name` binary in `dir`, if it exists and is executable.
+fn sibling_executable(dir: &Path, name: &str) -> Option<PathBuf> {
+    let candidate = dir.join(name);
+    exists_and_executable(&candidate).then_some(candidate)
+}
+
+/// Put `dir` at the front of a `PATH`-style string, keeping `base` intact.
+///
+/// Used to make the bundled CLI callable from an agent's shell without losing
+/// a project-configured `PATH` (nvm, toolchains, …). A no-op when `dir` is
+/// already the first entry, and an empty `base` yields just `dir` (rather than
+/// a trailing separator that would put the current directory on `PATH`).
+///
+/// Platform-aware: `:` separates entries on Unix and `;` on Windows (which
+/// `std::env::join_paths` handles, including quoting), so this does not
+/// hardcode the separator.
+pub fn prepend_to_path(dir: &Path, base: &str) -> String {
+    let mut entries: Vec<PathBuf> = Vec::new();
+    if base.is_empty() {
+        entries.push(dir.to_path_buf());
+    } else {
+        entries.extend(std::env::split_paths(base));
+        // Already first: hand back the caller's string untouched rather than a
+        // re-serialized one that might quote differently.
+        if entries.first().is_some_and(|first| first == dir) {
+            return base.to_string();
+        }
+        entries.insert(0, dir.to_path_buf());
+    }
+    std::env::join_paths(entries)
+        .map(|joined| joined.to_string_lossy().into_owned())
+        // An empty `base` keeps this infallible; a `base` that `split_paths`
+        // mis-parsed (e.g. a stray quote on Windows) falls back to a plain
+        // separator join, which is still better than dropping the CLI.
+        .unwrap_or_else(|_| format!("{}{}{}", dir.to_string_lossy(), PATH_SEPARATOR, base))
+}
+
+/// The platform's `PATH` entry separator.
+#[cfg(windows)]
+const PATH_SEPARATOR: char = ';';
+#[cfg(not(windows))]
+const PATH_SEPARATOR: char = ':';
+
+/// A string that looks like a path rather than a bare command name — anything
+/// with a separator, a Windows drive/UNC prefix, or a leading `.`/`/`/`~`.
+/// `Command` treats these the same way (a `PATH` search only happens for names
+/// without separators).
+fn is_path(bin: &str) -> bool {
+    if bin.contains(std::path::MAIN_SEPARATOR)
+        || bin.contains('/')
+        || bin.starts_with('.')
+        || bin.starts_with('~')
+    {
+        return true;
+    }
+    // `C:foo` and `\\server\share` are paths on Windows, not names. Gated so a
+    // Unix name that merely has a `:` in it (a configured executable such as
+    // `tool:+backend`) still resolves against `$PATH` instead of being treated
+    // as a literal, non-existent path.
+    cfg!(windows) && (bin.as_bytes().get(1) == Some(&b':') || bin.starts_with(r"\\"))
+}
+
+/// Whether `path` is a file this process could execute.
+///
+/// On Unix the executable bit decides. Windows has no such bit — `CreateProcess`
+/// goes by extension — so any existing file counts, with the `$PATHEXT` idea
+/// left to the caller's spawn.
+fn exists_and_executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::metadata(path)
+            .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::metadata(path).is_ok_and(|m| m.is_file())
+    }
 }
 
 /// A human-readable error for "the agent binary can't be found", naming what
@@ -139,5 +266,145 @@ mod tests {
     fn returns_none_for_empty_or_whitespace() {
         assert_eq!(resolve_executable(""), None);
         assert_eq!(resolve_executable("   "), None);
+    }
+
+    #[test]
+    fn sibling_executable_finds_an_executable_in_the_same_directory() {
+        let (dir, exec) = bin_dir();
+        assert_eq!(sibling_executable(dir.path(), "run-me"), Some(exec));
+        assert_eq!(sibling_executable(dir.path(), "lazy"), None);
+        assert_eq!(sibling_executable(dir.path(), "missing"), None);
+        dir.close().unwrap();
+    }
+
+    #[test]
+    fn hook_cli_path_keeps_absolute_paths_except_in_an_appimage() {
+        let cli = PathBuf::from("/Applications/Corral.app/Contents/MacOS/corral");
+        assert_eq!(
+            hook_cli_given(false, Some(cli.clone())),
+            Some(cli.clone()),
+            "normal installs should bake the absolute path"
+        );
+        assert_eq!(
+            hook_cli_given(true, Some(cli)),
+            None,
+            "an AppImage mount path changes every launch, so keep the bare name"
+        );
+    }
+
+    /// Write an executable `name` into `dir` and return its path.
+    fn make_executable(dir: &Path, name: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(&path, "#!/bin/sh\n").unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+
+    #[test]
+    fn cli_for_app_prefers_a_sibling_over_path() {
+        let _guard = PATH_LOCK.lock().unwrap();
+        // The app's own directory holds a `corral` (the `just build` layout);
+        // a different `corral` comes first on `$PATH`. The sibling must win,
+        // so a dev instance stays on its own CLI.
+        let app_dir = tempfile::tempdir().unwrap();
+        let sibling = make_executable(app_dir.path(), CLI_BINARY_NAME);
+        let app = make_executable(app_dir.path(), "corral-app");
+
+        let path_dir = tempfile::tempdir().unwrap();
+        make_executable(path_dir.path(), CLI_BINARY_NAME);
+        // SAFETY: process-global, serialized by PATH_LOCK (see above).
+        unsafe {
+            std::env::set_var(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    path_dir.path().display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+        };
+
+        assert_eq!(cli_for_app(&app), Some(sibling));
+    }
+
+    #[test]
+    fn cli_for_app_falls_back_to_path_without_a_sibling() {
+        let _guard = PATH_LOCK.lock().unwrap();
+        let app_dir = tempfile::tempdir().unwrap();
+        let app = make_executable(app_dir.path(), "corral-app");
+
+        let path_dir = tempfile::tempdir().unwrap();
+        let on_path = make_executable(path_dir.path(), CLI_BINARY_NAME);
+        // SAFETY: process-global, serialized by PATH_LOCK (see above).
+        unsafe {
+            std::env::set_var(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    path_dir.path().display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+        };
+
+        assert_eq!(cli_for_app(&app), Some(on_path));
+    }
+
+    #[test]
+    fn prepend_to_path_round_trips_through_the_platform_separator() {
+        // The result must split back into the same entries, whatever the
+        // platform separator is (`:` on Unix, `;` on Windows).
+        let dir = Path::new("/opt/corral/bin");
+        let base = std::env::join_paths(["/usr/bin", "/bin"]).unwrap();
+        let joined = prepend_to_path(dir, &base.to_string_lossy());
+        let parts: Vec<PathBuf> = std::env::split_paths(&joined).collect();
+        assert_eq!(
+            parts,
+            vec![
+                PathBuf::from("/opt/corral/bin"),
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/bin")
+            ]
+        );
+    }
+
+    #[test]
+    fn is_path_recognises_separators_and_roots() {
+        assert!(is_path("/usr/bin/corral"));
+        assert!(is_path("./corral"));
+        assert!(is_path("~/bin/corral"));
+        #[cfg(windows)]
+        {
+            assert!(is_path(r"C:\Tools\corral.exe"));
+            assert!(is_path("C:corral"));
+            assert!(is_path(r"\\server\share\corral.exe"));
+        }
+        assert!(!is_path("corral"));
+        assert!(!is_path("opencode"));
+        // A `:` isn't a path on Unix — only on Windows is it a drive prefix.
+        assert_eq!(is_path("tool:+backend"), cfg!(windows));
+    }
+
+    #[test]
+    fn prepend_to_path_puts_the_dir_first_and_keeps_the_base() {
+        let dir = Path::new("/Applications/Corral.app/Contents/MacOS");
+        assert_eq!(
+            prepend_to_path(dir, "/usr/bin:/bin"),
+            "/Applications/Corral.app/Contents/MacOS:/usr/bin:/bin"
+        );
+    }
+
+    #[test]
+    fn prepend_to_path_handles_empty_base_and_existing_first_entry() {
+        let dir = Path::new("/opt/corral/bin");
+        assert_eq!(prepend_to_path(dir, ""), "/opt/corral/bin");
+        assert_eq!(
+            prepend_to_path(dir, "/opt/corral/bin:/usr/bin"),
+            "/opt/corral/bin:/usr/bin",
+            "already-first should stay unchanged"
+        );
     }
 }
