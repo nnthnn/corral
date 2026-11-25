@@ -14,10 +14,49 @@ fn git_sha() -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// `bundle.externalBin` makes `tauri-build` require the sidecar to exist at
+/// **compile** time, so a plain `cargo check` in a fresh checkout would fail
+/// before the bundler ever runs (and `cargo check --workspace` is part of
+/// `just ci`). Create a loud placeholder when the real CLI hasn't been staged.
+///
+/// `scripts/stage-cli-sidecar.sh` — via `build.beforeBundleCommand` — runs
+/// after the app is compiled but before the bundler copies the sidecar, so it
+/// overwrites this. The placeholder can only reach a bundle if that hook is
+/// removed or skipped; it exits 127 with a clear message instead of silently
+/// pretending to be the CLI. `src-tauri/binaries/` is gitignored.
+fn ensure_sidecar_placeholder() {
+    let Ok(triple) = std::env::var("TARGET") else {
+        return;
+    };
+    let suffix = if triple.contains("windows") {
+        format!("corral-{triple}.exe")
+    } else {
+        format!("corral-{triple}")
+    };
+    let dir = std::path::Path::new("binaries");
+    let path = dir.join(suffix);
+    if path.exists() {
+        return;
+    }
+
+    const STUB: &str = "#!/bin/sh\n\
+        echo 'corral: this bundle was built without the CLI sidecar (run `just bundle`)' >&2\n\
+        exit 127\n";
+    if std::fs::create_dir_all(dir).is_ok() && std::fs::write(&path, STUB).is_ok() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+}
+
 fn main() {
     println!("cargo:rustc-env=CORRAL_GIT_SHA={}", git_sha());
     println!("cargo:rerun-if-changed=../.git/HEAD");
     println!("cargo:rerun-if-changed=../.git/index");
+
+    ensure_sidecar_placeholder();
 
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[

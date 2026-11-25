@@ -612,12 +612,22 @@ pub async fn start_session(
     // `.claude/settings.local.json` is symlinked from every worktree back to
     // the main repo (`worktree::link_claude_dir`), so this is written once
     // per project and is safe to call on every session start — it's a
-    // no-op once the hooks are already present (see `hooks::merge_hooks`).
+    // no-op once the hooks are already present, and replaces a stale CLI path
+    // when the app moved or switched between dev and bundled builds (see
+    // `hooks::merge_hooks`).
+    //
+    // The CLI path is absolute on normal installs because the hook runs in
+    // Claude's shell, which on macOS never has the app bundle's
+    // `Contents/MacOS` on `PATH`. An AppImage keeps the bare `corral` name
+    // (its mount path changes every launch); see `bin::hook_cli_path`.
     let repo_claude_settings = config::repo_path(&project)
         .str_err()?
         .join(".claude")
         .join("settings.local.json");
-    if let Err(e) = corral_core::hooks::ensure_hooks_installed(&repo_claude_settings) {
+    if let Err(e) = corral_core::hooks::ensure_hooks_installed(
+        &repo_claude_settings,
+        corral_core::bin::hook_cli_path().as_deref(),
+    ) {
         tracing::warn!("start_session: failed to install status hooks: {e}");
     }
 
@@ -1060,6 +1070,28 @@ pub async fn start_session(
         // over them.
         for (key, value) in project_settings.env_vars() {
             cmd.env(key, value);
+        }
+        // Put the CLI bundled with this app install on the agent's PATH, so
+        // `corral rename/list/done/awake` (the onboarding prompt tells agents
+        // to run these) resolve from inside the session's shell. The hook
+        // itself uses an absolute path — see `bin::hook_cli_path` — but this
+        // also covers the AppImage case, where no stable absolute path exists.
+        //
+        // Prepended *after* the project's env vars so a project-configured
+        // PATH (nvm, a toolchain shim, …) stays the base instead of being
+        // clobbered.
+        if let Some(cli) = corral_core::bin::corral_cli_path()
+            && let Some(dir) = cli.parent()
+        {
+            let project_path = project_settings
+                .env_vars()
+                .filter(|(key, _)| *key == "PATH")
+                .map(|(_, value)| value.to_string())
+                .last();
+            let base = project_path
+                .or_else(|| std::env::var("PATH").ok())
+                .unwrap_or_default();
+            cmd.env("PATH", corral_core::bin::prepend_to_path(dir, &base));
         }
         cmd.env("TERM", "xterm-256color");
         cmd.env(

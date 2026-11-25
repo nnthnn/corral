@@ -104,14 +104,10 @@ jobs:
           fi
           echo "Building corral v$cargo_version"
 
-      # The bundles ship the CLI as /usr/bin/corral, so it has to exist before
-      # `pnpm tauri build` runs (see bundle.linux.*.files in tauri.conf.json).
-      - name: Build CLI
-        run: cargo build --release -p corral-cli
-
-      # `pnpm tauri build` runs the beforeBuildCommand (tsc + vite build) first,
-      # then compiles the Rust app and produces the bundles in
-      # target/release/bundle/{deb,rpm,appimage} (the workspace target dir).
+      # `pnpm tauri build` runs the beforeBuildCommand (tsc + vite build) and
+      # beforeBundleCommand (scripts/stage-cli-sidecar.sh, which builds and
+      # stages the CLI sidecar), then compiles the Rust app and produces the
+      # bundles in target/release/bundle/{deb,rpm,appimage}.
       - name: Build release bundles
         run: pnpm tauri build
 
@@ -140,17 +136,15 @@ jobs:
     # the first time this workflow ran.
     if: github.event_name == 'workflow_dispatch' && inputs.build_macos
     continue-on-error: true
-    # macOS runners are arm64; building the universal binary also needs the
-    # x86_64 target installed (below), which is why this is one job rather
-    # than one per architecture.
+    # macOS runners are arm64, which is the architecture the released dmg
+    # targets (Apple stopped selling Intel Macs in 2023). An Intel user can
+    # build a universal dmg from source with `just universal`.
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust (both macOS targets)
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Cache cargo registry/build
         uses: Swatinem/rust-cache@v2
@@ -181,7 +175,7 @@ jobs:
       # right-click → Open on first launch). Empty secrets are unset rather
       # than passed through, because an empty APPLE_CERTIFICATE would make
       # the bundler try to import an empty certificate and fail.
-      - name: Build universal release bundles
+      - name: Build release bundles
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -194,7 +188,7 @@ jobs:
                      APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
             if [ -z "${!var}" ]; then unset "$var"; fi
           done
-          pnpm tauri build --target universal-apple-darwin
+          pnpm tauri build
 
       - name: Upload macOS bundles
         uses: actions/upload-artifact@v7
@@ -202,7 +196,7 @@ jobs:
           name: macos-bundles
           if-no-files-found: error
           path: |
-            target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            target/release/bundle/dmg/*.dmg
 
   publish:
     # Skipped entirely on a manual run: a dry run must never create a release.
