@@ -45,6 +45,7 @@ export const DEFAULT_SETTINGS: Settings = {
   pi_executable_path: "",
   browser_enabled: true,
   linear_api_key: "",
+  linear_api_key_set: false,
 };
 
 export type TabId = "agent" | "run" | "setup" | "pr" | "diff" | "file";

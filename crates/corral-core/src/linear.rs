@@ -127,7 +127,8 @@ fn http_agent() -> &'static ureq::Agent {
 /// Whether `query` looks like a Linear issue identifier (`ENG-123`) rather
 /// than free text. Team keys are alphanumeric and the numeric half is digits
 /// only, so `auth-bug` (a plausible search term) is correctly *not* treated as
-/// an identifier. Split out for tests; exact-identifier lookups use
+/// an identifier, and a bare `2-3` or `2024-12` doesn't either — the key needs
+/// at least one letter. Split out for tests; exact-identifier lookups use
 /// `issue(id:)` because `searchIssues` is full-text and can miss identifiers.
 fn is_issue_identifier(query: &str) -> bool {
     let Some((key, number)) = query.split_once('-') else {
@@ -136,6 +137,7 @@ fn is_issue_identifier(query: &str) -> bool {
     !key.is_empty()
         && key.len() <= 16
         && key.chars().all(|c| c.is_ascii_alphanumeric())
+        && key.chars().any(|c| c.is_ascii_alphabetic())
         && !number.is_empty()
         && number.chars().all(|c| c.is_ascii_digit())
 }
@@ -306,6 +308,10 @@ mod tests {
         assert!(!is_issue_identifier("-123"));
         assert!(!is_issue_identifier("ENG-12a"));
         assert!(!is_issue_identifier("plain text"));
+        // Numeric-only keys aren't Linear team keys — treat them as text
+        // instead of burning an `issue(id:)` round-trip on every date.
+        assert!(!is_issue_identifier("2-3"));
+        assert!(!is_issue_identifier("2024-12"));
     }
 
     #[test]

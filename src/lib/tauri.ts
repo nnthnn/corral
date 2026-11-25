@@ -188,15 +188,20 @@ interface CommandMap {
   copy_diagnostics: { args: undefined; result: string };
   save_pasted_image: { args: { bytes: number[] }; result: string };
   save_text_attachment: { args: { text: string }; result: string };
+  // No `apiKey` argument: the key is a credential the webview never holds —
+  // each command reads it from the config dir on the Rust side.
   linear_search: {
-    args: { apiKey: string; query: string; limit?: number };
+    args: { query: string; limit?: number };
     result: LinearIssueSummary[];
   };
   linear_recent: {
-    args: { apiKey: string; limit?: number };
+    args: { limit?: number };
     result: LinearIssueSummary[];
   };
-  linear_issue: { args: { apiKey: string; id: string }; result: LinearIssue };
+  linear_issue: { args: { id: string }; result: LinearIssue };
+  linear_clear_api_key: { args: undefined; result: undefined };
+  /** Where the key is stored: "your system keychain" or the file fallback. */
+  linear_key_storage: { args: undefined; result: string };
   open_in_zed: {
     args: { path: string; editorCommand: string };
     result: undefined;

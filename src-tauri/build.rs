@@ -80,6 +80,8 @@ fn main() {
             "linear_search",
             "linear_recent",
             "linear_issue",
+            "linear_clear_api_key",
+            "linear_key_storage",
             "open_in_zed",
             "open_terminal",
             "get_settings",

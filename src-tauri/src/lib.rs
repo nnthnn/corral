@@ -209,6 +209,8 @@ pub fn run() {
             commands::linear::linear_search,
             commands::linear::linear_recent,
             commands::linear::linear_issue,
+            commands::linear::linear_clear_api_key,
+            commands::settings::linear_key_storage,
             commands::system::open_in_zed,
             commands::system::open_terminal,
             commands::settings::get_settings,

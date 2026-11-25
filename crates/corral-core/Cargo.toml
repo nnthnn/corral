@@ -27,5 +27,31 @@ url = "2"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# OS credential stores for `secret.rs`, one per supported platform. All three
+# are reached through `keyring-core`'s store abstraction, so `secret.rs` is
+# plain safe code; each store is registered at first use.
+#
+# Deliberately the per-store crates rather than the all-in-one `keyring` crate:
+# `keyring`'s `v1` compatibility mode picks its own store, which is a
+# different one on every platform and would quietly change behaviour. Linux
+# uses the zbus (pure-Rust D-Bus) backend, not the libdbus one, so no system
+# library is linked and the AppImage/deb keep working on machines without
+# `libsecret` installed — Secret Service is spoken to the *daemon* over the
+# session bus at runtime.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring-core = "1"
+zbus-secret-service-keyring-store = { version = "1", features = ["rt-tokio-crypto-rust"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring-core = "1"
+# `keychain`, not `protected`: corral's dmg is unsigned, and the protected-data
+# store requires a code-signing provisioning profile.
+apple-native-keyring-store = { version = "1", features = ["keychain"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring-core = "1"
+windows-native-keyring-store = "1"
+
 [dev-dependencies]
 tempfile = "3"

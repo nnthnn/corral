@@ -253,6 +253,10 @@ on a Mac — keep that in mind when touching `process.rs`, `caffeinate.rs`, or
   `systemd-inhibit` on Linux, `caffeinate` on macOS, or
   `SetThreadExecutionState` on Windows for the worker's lifetime. Wrap the
   worker, not a launcher that exits immediately.
+- **Credential storage is `corral-core::secret`, not `Settings`.** Anything
+  secret goes through `secret::set/get/clear` with the config dir, never into
+  `settings.json` (which is re-serialized on every toggle and snapshotted to
+  `.bak`). Every store file and backup is written `0600`.
 - **Rust changes need a full app restart.** Vite HMR only reloads the
   frontend; new/changed Tauri commands or Rust logic won't take effect until
   the binary rebuilds (e.g. `just run`). Frontend-only changes hot-reload
@@ -595,6 +599,16 @@ See `IDEAS.md` for the backlog. As of the latest work, implemented:
   referenced by path, the same pattern the PR/checks "Add to chat" actions use.
   Dropping OS files on the terminal (or pasting a clipboard image) inserts
   their quoted paths.
+  The API key is a credential and is handled differently from every other
+  setting: it is `#[serde(skip)]`, never crosses the IPC boundary, and the
+  `linear_*` commands read it backend-side. `corral-core::secret` stores it in
+  the OS credential store (Secret Service via zbus on Linux, Keychain on
+  macOS, Credential Manager on Windows) and falls back to a `0600` file in the
+  config dir when none is available — which is routine on Linux, so the
+  fallback is load-bearing, not an error path. `CORRAL_SECRET_FILE_ONLY=1`
+  forces the file backend (tests use it so they never touch a real keychain).
+  Support is deliberately Linux/macOS/Windows only; other Unix targets get the
+  file fallback.
 - **Per-project settings**, per-worktree free-text notes (sidebar subtitle,
   untracked), and desktop notifications (with cowboy flair 🤠). Provisioning
   files and the setup command are configured per project; the setup command

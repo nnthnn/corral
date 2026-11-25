@@ -227,10 +227,14 @@ export interface Settings {
   /** Attach corral's embedded browser host to OpenCode v2 sessions, which is
    * what enables OpenCode's `browser.*` tools. On by default. */
   browser_enabled: boolean;
-  /** Personal Linear API key used by the "Attach Linear ticket" action.
-   * Empty means the integration isn't configured. Stored in plain text in
-   * `settings.json`, like every other preference. */
+  /** Always empty in the webview: the backend never sends the key itself
+   * (it lives in its own owner-only file and is read only by the Linear
+   * commands). Blank on save means "unchanged" — clearing is an explicit
+   * `linear_clear_api_key` call, so `SettingsForm` keeps the typed value
+   * locally until it's saved. */
   linear_api_key: string;
+  /** Whether a Linear API key is stored — what the ticket picker gates on. */
+  linear_api_key_set: boolean;
 }
 
 /** One row in the Linear ticket picker. */

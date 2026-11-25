@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useStore } from "../store";
 import type { LinearIssue, LinearIssueSummary } from "../types";
@@ -36,7 +36,7 @@ const issue: LinearIssue = {
 function openWithKey(): void {
   useStore.setState((s) => ({
     linearDialogOpen: true,
-    settings: { ...s.settings, linear_api_key: "lin_api_test" },
+    settings: { ...s.settings, linear_api_key_set: true },
   }));
 }
 
@@ -82,10 +82,7 @@ describe("LinearIssueDialog", () => {
       await screen.findByText("Recently touched ticket"),
     ).toBeInTheDocument();
     expect(screen.getByText("Recent tickets")).toBeInTheDocument();
-    expect(invoke).toHaveBeenCalledWith("linear_recent", {
-      apiKey: "lin_api_test",
-      limit: 10,
-    });
+    expect(invoke).toHaveBeenCalledWith("linear_recent", { limit: 10 });
   });
 
   it("replaces the recent list with search results once you type", async () => {
@@ -103,10 +100,7 @@ describe("LinearIssueDialog", () => {
       screen.queryByText("Recently touched ticket"),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("Recent tickets")).not.toBeInTheDocument();
-    expect(invoke).toHaveBeenCalledWith("linear_search", {
-      apiKey: "lin_api_test",
-      query: "login",
-    });
+    expect(invoke).toHaveBeenCalledWith("linear_search", { query: "login" });
   });
 
   it("attaches the chosen ticket and closes", async () => {
@@ -126,10 +120,7 @@ describe("LinearIssueDialog", () => {
         expect.stringContaining("/tmp/ticket.txt"),
       ),
     );
-    expect(invoke).toHaveBeenCalledWith("linear_issue", {
-      apiKey: "lin_api_test",
-      id: "uuid-1",
-    });
+    expect(invoke).toHaveBeenCalledWith("linear_issue", { id: "uuid-1" });
     expect(invoke).toHaveBeenCalledWith("save_text_attachment", {
       text: expect.stringContaining("## Description"),
     });
@@ -163,5 +154,78 @@ describe("LinearIssueDialog", () => {
 
     fireEvent.mouseDown(dialog);
     expect(useStore.getState().linearDialogOpen).toBe(false);
+  });
+});
+
+describe("LinearIssueDialog key lifecycle", () => {
+  it("does not carry a stale query into a later open", async () => {
+    mockLinear({ recent: [recentSummary], search: [summary] });
+    openWithKey();
+    const { unmount } = render(<LinearIssueDialog />);
+    await screen.findByText("Recently touched ticket");
+
+    fireEvent.change(screen.getByPlaceholderText(/Issue ID \(ENG-123\)/), {
+      target: { value: "login" },
+    });
+    await screen.findByText("Fix login timeout");
+
+    // Escape/backdrop close, then reopen: the field must start empty.
+    fireEvent.mouseDown(screen.getByRole("dialog"));
+    await vi.waitFor(() =>
+      expect(useStore.getState().linearDialogOpen).toBe(false),
+    );
+    act(() => useStore.setState({ linearDialogOpen: true }));
+
+    const input = screen.getByPlaceholderText(/Issue ID \(ENG-123\)/);
+    expect(input).toHaveValue("");
+    unmount();
+  });
+
+  it("reports a ticket-fetch failure as a toast when dismissed mid-request", async () => {
+    vi.mocked(invoke).mockImplementation(((cmd: string) => {
+      if (cmd === "linear_search") return Promise.resolve([summary]);
+      if (cmd === "linear_issue")
+        return Promise.reject("Linear returned HTTP 500.");
+      return Promise.resolve(undefined);
+    }) as typeof invoke);
+    openWithKey();
+    render(<LinearIssueDialog />);
+
+    fireEvent.change(screen.getByPlaceholderText(/Issue ID \(ENG-123\)/), {
+      target: { value: "login" },
+    });
+    fireEvent.click(await screen.findByText("Fix login timeout"));
+    fireEvent.mouseDown(screen.getByRole("dialog"));
+
+    await vi.waitFor(() =>
+      expect(
+        useStore.getState().toasts.some((t) => t.message.includes("HTTP 500")),
+      ).toBe(true),
+    );
+  });
+});
+
+describe("LinearIssueDialog after adding a key", () => {
+  it("shows the recent list, not the old query, when reopened after Settings", async () => {
+    mockLinear({ recent: [recentSummary], search: [summary] });
+    // Open with no key, go to Settings, set a key, then reopen.
+    act(() => useStore.setState({ linearDialogOpen: true }));
+    render(<LinearIssueDialog />);
+    expect(screen.getByText("Linear API key needed")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Open Settings"));
+
+    act(() =>
+      useStore.setState((s) => ({
+        linearDialogOpen: false,
+        settings: { ...s.settings, linear_api_key_set: true },
+      })),
+    );
+    act(() => useStore.setState({ linearDialogOpen: true }));
+
+    expect(
+      await screen.findByText("Recently touched ticket"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Recent tickets")).toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith("linear_search", expect.anything());
   });
 });

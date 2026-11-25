@@ -11,10 +11,12 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::error::Result;
 use crate::json_store;
 use crate::paths;
+use crate::secret;
 
 /// Default external-editor command for the "Zed" button. Zed's CLI is named
 /// differently per platform: distro packages on Linux install `zeditor` (the
@@ -144,11 +146,22 @@ pub struct Settings {
     /// leaves the tools unavailable — useful for users who never want them, or
     /// as a switch if a future opencode release changes the protocol.
     pub browser_enabled: bool,
-    /// Personal Linear API key, used by the header's ticket-lookup command to
-    /// read issue titles/bodies. Empty means "Linear integration not set up".
-    /// Stored in plain text in `settings.json`, like every other preference —
-    /// the Settings field warns about that.
+    /// Personal Linear API key, used by the Linear ticket commands to read
+    /// issue titles/bodies. Empty means "Linear integration not set up".
+    ///
+    /// Unlike every other field this is a credential, so it is *never*
+    /// serialized: `#[serde(skip)]` keeps it out of `settings.json` (and its
+    /// `.bak` snapshots) entirely, and out of any `Settings` handed across the
+    /// IPC boundary to the webview. It lives in its own owner-only file next
+    /// to `settings.json` — see [`load_linear_api_key`] /
+    /// [`set_linear_api_key`] — which is the only way in or out.
+    #[serde(skip)]
     pub linear_api_key: String,
+    /// Whether a Linear API key is stored, for the UI to gate on (the key
+    /// itself never leaves the backend). Derived from the key file on every
+    /// [`load`], so the value persisted in `settings.json` is only a hint for
+    /// hand-edited files — never the source of truth.
+    pub linear_api_key_set: bool,
 }
 
 impl Default for Settings {
@@ -184,8 +197,60 @@ impl Default for Settings {
             pi_executable_path: String::new(),
             browser_enabled: true,
             linear_api_key: String::new(),
+            linear_api_key_set: false,
         }
     }
+}
+
+/// Name of the Linear API key secret — an OS-keychain entry name, and (for the
+/// file fallback) the file name in the config dir.
+pub const LINEAR_API_KEY: &str = "linear_api_key";
+
+// File helpers used by `crate::secret`'s fallback backend. `0600`, and a
+// missing file reads as `None` rather than an error — but an unreadable one is
+// an error, so callers never mistake "can't read" for "not set".
+
+pub(crate) fn read_secret_file(path: &std::path::Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(value) => Ok(Some(value.trim().to_string())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+pub(crate) fn write_secret_file(path: &std::path::Path, value: &str) -> Result<()> {
+    // `\n` terminates the value so `cat`/`wc -l` behave in a terminal; the
+    // reader trims it back off.
+    json_store::write_private(path, format!("{}\n", value.trim()).as_bytes())
+}
+
+pub(crate) fn remove_secret_file(path: &std::path::Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// The stored Linear API key, or empty when none is set.
+pub fn load_linear_api_key() -> Result<String> {
+    Ok(secret::get(LINEAR_API_KEY, &paths::config_root()?)?.unwrap_or_default())
+}
+
+/// Store the Linear API key (trimmed); blank clears it.
+pub fn set_linear_api_key(key: &str) -> Result<()> {
+    secret::set(LINEAR_API_KEY, &paths::config_root()?, key).map(|_| ())
+}
+
+/// Whether a Linear key is stored, without loading its value where avoidable.
+pub fn linear_api_key_is_set() -> Result<bool> {
+    Ok(!load_linear_api_key()?.is_empty())
+}
+
+/// Where the key is stored right now ("system keychain" vs "owner-only file"),
+/// so Settings can say so.
+pub fn linear_api_key_storage_description() -> Result<&'static str> {
+    Ok(secret::backend_description(&paths::config_root()?))
 }
 
 pub fn load() -> Result<Settings> {
@@ -196,8 +261,86 @@ pub fn save(settings: &Settings) -> Result<()> {
     save_under(&settings_path()?, settings)
 }
 
+/// Forget the stored Linear API key (the explicit "remove it" half of
+/// [`set_linear_api_key`] — saving a blank key through [`save`] is a no-op,
+/// since the webview's copy of `Settings` is always blank).
+pub fn clear_linear_api_key() -> Result<()> {
+    secret::clear(LINEAR_API_KEY, &paths::config_root()?)
+}
+
 fn load_under(path: &std::path::Path) -> Result<Settings> {
-    json_store::load_or_default(path, "settings")
+    let mut settings: Settings = json_store::load_or_default(path, "settings")?;
+    // Older builds stored the key *inside* `settings.json`; `#[serde(skip)]`
+    // now ignores it, so migrate a legacy copy into the secret store and evict
+    // it from the JSON blob (`.bak` copies go on the next save). Without this,
+    // the first release that ships this would silently lose keys set by the
+    // previous one.
+    let config_dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    migrate_legacy_linear_key(config_dir);
+    // The key lives in the secret store rather than in `settings.json`, so
+    // load it the same way `save_under` persists it. A *missing* key is "not
+    // set", not an error — `load` must stay usable for every other field. Any
+    // other failure (a key we can't read) must not be turned into "not set":
+    // the Settings form would then offer to add a key, and saving would
+    // overwrite one that's still there.
+    settings.linear_api_key = secret::get(LINEAR_API_KEY, config_dir)?.unwrap_or_default();
+    settings.linear_api_key_set = !settings.linear_api_key.is_empty();
+    Ok(settings)
+}
+
+/// Move a `linear_api_key` value found in an old `settings.json` into the
+/// secret store, then rewrite the blob without it. Best-effort: a failed write
+/// leaves the value where it was (still readable) and the next launch retries.
+///
+/// Two generations of legacy layout are handled: the original one kept the key
+/// in `settings.json` (this function), and the immediately preceding one kept
+/// it in a plain `linear_api_key` file beside it (the file branch below).
+fn migrate_legacy_linear_key(config_dir: &std::path::Path) {
+    let path = settings_path_in(config_dir);
+    // The file layout wins if both exist — it's newer — and only a stale
+    // `settings.json` copy gets adopted.
+    let stored = secret::get(LINEAR_API_KEY, config_dir).ok().flatten();
+    if let Ok(Some(file_value)) = read_secret_file(&config_dir.join(LINEAR_API_KEY))
+        && stored.is_none()
+        && let Err(e) = secret::set(LINEAR_API_KEY, config_dir, &file_value)
+    {
+        tracing::warn!("settings: couldn't move the Linear key file into the secret store: {e}");
+    }
+    let raw = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(_) => return,
+    };
+    let Ok(Value::Object(mut map)) = serde_json::from_slice::<Value>(&raw) else {
+        return;
+    };
+    let Some(Value::String(legacy)) = map.remove("linear_api_key") else {
+        return;
+    };
+    let key = legacy.trim();
+    let already_stored = secret::get(LINEAR_API_KEY, config_dir)
+        .ok()
+        .flatten()
+        .is_some_and(|v| !v.is_empty());
+    if !key.is_empty()
+        && !already_stored
+        && let Err(e) = secret::set(LINEAR_API_KEY, config_dir, key)
+    {
+        // Keep the legacy value in place rather than dropping it on a failed
+        // write — losing the user's key to storage trouble is worse than
+        // leaving it in the old spot for the next launch.
+        tracing::warn!("settings: couldn't move legacy Linear key into the secret store: {e}");
+        return;
+    }
+    match serde_json::to_vec_pretty(&Value::Object(map)) {
+        Ok(bytes) => {
+            if let Err(e) = json_store::write_private(&path, &bytes) {
+                tracing::warn!("settings: couldn't evict legacy Linear key from {path:?}: {e}");
+                return;
+            }
+            tracing::info!("settings: moved Linear API key out of settings.json");
+        }
+        Err(e) => tracing::warn!("settings: couldn't rewrite {path:?} after migration: {e}"),
+    }
 }
 
 fn save_under(path: &std::path::Path, settings: &Settings) -> Result<()> {
@@ -224,6 +367,26 @@ fn save_under(path: &std::path::Path, settings: &Settings) -> Result<()> {
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
+    // A blank key means "unchanged" rather than "clear the stored key": the
+    // webview never receives the real key (`#[serde(skip)]`), so every save
+    // it sends has it blank, and treating that as a clear would log the user
+    // out of Linear on the next unrelated toggle. Clearing is explicit, via
+    // `clear_linear_api_key`.
+    let new_key = settings.linear_api_key.trim();
+    // Belt-and-suspenders: `#[serde(skip)]` already keeps the key out of the
+    // blob, but blanking it here means a future change to that attribute
+    // can't silently start writing the credential to `settings.json`.
+    let mut scrubbed = settings.clone();
+    scrubbed.linear_api_key.clear();
+    scrubbed.linear_api_key_set = settings.linear_api_key_set || !new_key.is_empty();
+    // The key goes to the secret store (keychain, or its file fallback) and
+    // never through `#[serde]`, so neither `settings.json` nor its `.bak`
+    // snapshot can contain it. Outside the settings lock: keychain access can
+    // prompt for unlock, and holding the store lock across that would stall
+    // every other corral process waiting on settings.
+    if !new_key.is_empty() {
+        secret::set(LINEAR_API_KEY, dir, new_key)?;
+    }
     json_store::with_locked_path(dir, &file_name, |path| {
         // Preserve what's on disk before overwriting it: `settings.json` is
         // shared across every corral build on the machine, so a file written
@@ -233,8 +396,22 @@ fn save_under(path: &std::path::Path, settings: &Settings) -> Result<()> {
         // it, so this is belt-and-suspenders for the "about to overwrite"
         // moment.
         json_store::backup_existing(path, "settings");
-        json_store::save_pretty(path, settings)
-    })
+        json_store::save_pretty(path, &scrubbed)
+    })?;
+    // Files written by older builds (and any hand-edited or restored from a
+    // backup) are still at the umask default. Tightening is best-effort: a
+    // failure here must not fail the save itself, since the JSON layer already
+    // writes owner-only.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for p in [path.to_path_buf(), path.with_file_name("settings.json.bak")] {
+            if let Err(e) = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)) {
+                tracing::debug!("settings: couldn't tighten permissions on {p:?}: {e}");
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -406,6 +583,7 @@ mod tests {
             pi_executable_path: "/opt/pi/bin/pi".into(),
             browser_enabled: false,
             linear_api_key: "lin_api_test".into(),
+            linear_api_key_set: true,
         };
 
         save_under(&path, &s).unwrap();
@@ -444,17 +622,125 @@ mod tests {
         assert_eq!(loaded.pi_executable_path, s.pi_executable_path);
         assert_eq!(loaded.browser_enabled, s.browser_enabled);
         assert_eq!(loaded.linear_api_key, s.linear_api_key);
+        assert!(loaded.linear_api_key_set);
     }
 
     #[test]
     fn linear_api_key_defaults_to_empty_string() {
         let s = Settings::default();
         assert_eq!(s.linear_api_key, "");
+        assert!(!s.linear_api_key_set);
 
         // Simulates a settings.json written before this field existed.
         let json = r#"{"editor_command":"zeditor"}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(s.linear_api_key, "");
+    }
+
+    #[test]
+    fn linear_api_key_never_reaches_settings_json_or_its_backup() {
+        let _guard = crate::secret::tests::FILE_ONLY_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // The whole reason the key lives in its own file: `settings.json` is
+        // rewritten on every unrelated toggle, and every save snapshots the
+        // previous contents to `.bak`. Neither may contain the credential.
+        let dir = tempfile::tempdir().unwrap();
+        let path = settings_path_in(dir.path());
+        let mut s = Settings {
+            linear_api_key: "lin_api_secret".into(),
+            ..Settings::default()
+        };
+        save_under(&path, &s).unwrap();
+
+        // A later save from the webview (which never receives the key) must
+        // not clear the stored one.
+        s.linear_api_key.clear();
+        s.sidebar_width = 400;
+        save_under(&path, &s).unwrap();
+
+        for file in ["settings.json", "settings.json.bak"] {
+            let text = std::fs::read_to_string(dir.path().join(file)).unwrap();
+            assert!(!text.contains("lin_api_secret"), "{file} leaked the key");
+        }
+        assert_eq!(load_under(&path).unwrap().linear_api_key, "lin_api_secret");
+
+        // Explicit clear removes it.
+        secret::clear(LINEAR_API_KEY, dir.path()).unwrap();
+        assert!(load_under(&path).unwrap().linear_api_key.is_empty());
+        assert!(!load_under(&path).unwrap().linear_api_key_set);
+    }
+
+    #[test]
+    fn legacy_key_inside_settings_json_is_migrated_out() {
+        let _guard = crate::secret::tests::FILE_ONLY_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // Builds before this one stored the key in `settings.json`; the first
+        // launch after the upgrade must move it to the key file and evict it
+        // from the blob, or the key would be silently forgotten (and keep
+        // sitting at world-readable permissions).
+        let dir = tempfile::tempdir().unwrap();
+        let path = settings_path_in(dir.path());
+        std::fs::write(
+            &path,
+            r#"{"editor_command":"zeditor","linear_api_key":"lin_api_legacy"}"#,
+        )
+        .unwrap();
+
+        let loaded = load_under(&path).unwrap();
+        assert_eq!(loaded.linear_api_key, "lin_api_legacy");
+        assert!(loaded.linear_api_key_set);
+        let blob = std::fs::read_to_string(&path).unwrap();
+        assert!(!blob.contains("lin_api_legacy"), "legacy key not evicted");
+        assert!(blob.contains("zeditor"), "other fields must survive");
+    }
+
+    #[test]
+    fn unreadable_key_file_is_an_error_not_a_silent_clear() {
+        let _guard = crate::secret::tests::FILE_ONLY_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // A key file that exists but can't be read must surface as an error:
+        // treating it as "not set" would make the Settings form offer to add
+        // a key, and the next save would overwrite the one still on disk.
+        let dir = tempfile::tempdir().unwrap();
+        let path = settings_path_in(dir.path());
+        // A directory in the key file's place: readable as a path, unreadable
+        // as a file, on every platform and without relying on permissions.
+        std::fs::create_dir(dir.path().join(LINEAR_API_KEY)).unwrap();
+
+        assert!(load_under(&path).is_err());
+    }
+
+    #[test]
+    fn legacy_key_file_moves_into_the_secret_store() {
+        let _guard = crate::secret::tests::FILE_ONLY_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // The layout shipped before the keyring work wrote a plain
+        // `linear_api_key` file. Upgrading must adopt it (rather than treating
+        // the store as empty) and put it behind `secret`.
+        let dir = tempfile::tempdir().unwrap();
+        let path = settings_path_in(dir.path());
+        write_secret_file(&dir.path().join(LINEAR_API_KEY), "lin_api_file").unwrap();
+
+        let loaded = load_under(&path).unwrap();
+        assert_eq!(loaded.linear_api_key, "lin_api_file");
+        assert!(loaded.linear_api_key_set);
+    }
+
+    #[test]
+    fn save_pretty_writes_owner_only_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        save_under(&path, &Settings::default()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
     }
 
     #[test]

@@ -30,6 +30,7 @@ pub mod process;
 pub mod project;
 pub mod project_create;
 pub mod project_settings;
+pub mod secret;
 pub mod settings;
 pub mod shell_env;
 pub mod watch;

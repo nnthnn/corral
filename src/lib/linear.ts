@@ -3,6 +3,17 @@ import type { LinearIssue } from "../types";
 import { invoke } from "./tauri";
 import { showError, showSuccess } from "./toasts";
 
+/** Window event fired after the Linear API key is added, replaced, or removed,
+ * so the open dialog drops a result list that belongs to the old key. A DOM
+ * event rather than store state because the listener (the dialog) may be
+ * closed, and because the key's value isn't something the store should hold.
+ */
+export const LINEAR_KEY_SAVED_EVENT = "corral:linear-key-saved";
+
+export function announceLinearKeySaved(): void {
+  window.dispatchEvent(new Event(LINEAR_KEY_SAVED_EVENT));
+}
+
 /** Render a ticket as a self-contained markdown document. Written to a temp
  * file and referenced by path (like a failed CI log or PR comments — see
  * `save_text_attachment`) so a long ticket body doesn't flood the terminal. */
