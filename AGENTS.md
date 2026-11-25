@@ -342,7 +342,18 @@ on a Mac — keep that in mind when touching `process.rs`, `caffeinate.rs`, or
   to the agent PTY's `PATH` so `corral rename/list/done/awake` work.
   `bin::hook_cli_path()` returns `None` inside an AppImage, whose mount path
   changes every launch, and `merge_hooks` replaces a stale managed entry rather
-  than accumulating another. Don't use `resource_dir()`/
+  than accumulating another.
+  **The staging script must stay bash-3.2-safe**, because on a Mac it runs
+  under `/bin/bash` 3.2 (Apple's last GPLv2 build) even though the shebang says
+  `env bash` and `just`/`fish` may hand it 5.x: under `set -u`, 3.2 aborts on
+  `"${empty_array[@]}"` with `<name>[@]: unbound variable` where bash 4.4+
+  expands it to nothing, so `locked=(); locked=(--locked)` made every macOS
+  `just bundle` die at the sidecar step (`line 39: locked[@]: unbound
+  variable`) — after a full release compile, so it was slow to hit and slow to
+  diagnose. Keep optional args in plain strings and word-split deliberately (see
+  `run_cargo`), never in possibly-empty arrays; same for any script a macOS
+  build hook runs. Nothing in CI catches this — there's no macOS job — so it
+  only shows up in the manual `.dmg` build. Don't use `resource_dir()`/
   `Contents/Resources` for this — sidecars live in `Contents/MacOS`.
 - **`just bundle` builds the CLI itself now.** The freedesktop packages used to
   need a separate `cargo build -p corral-cli` before `pnpm tauri build`
