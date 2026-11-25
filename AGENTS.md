@@ -318,16 +318,23 @@ on a Mac — keep that in mind when touching `process.rs`, `caffeinate.rs`, or
   `src-tauri/binaries/corral-<target-triple>`; the bundler copies it to
   `Contents/MacOS/corral` in the `.app` (and signs it with the app) and to
   `/usr/bin/corral` in the Linux packages. `tauri-build` requires the sidecar
-  to exist at **compile** time, so `src-tauri/build.rs` writes a loud
-  placeholder when it is missing (otherwise a fresh `cargo check` would fail);
-  the before-bundle hook overwrites it with the real CLI. Do **not** switch
+  to exist at **compile** time and errors out when it is missing, so plain
+  `cargo check` in a fresh checkout fails before the bundler runs — the
+  `justfile` therefore exports `TAURI_CONFIG` with `bundle.externalBin` emptied
+  for `just check` / `just build` (which also build the CLI into the same
+  profile dir, so `corral_cli_path` finds it as a sibling). Never work around
+  this by writing a stub into `src-tauri/binaries/`: `tauri-build` would copy it
+  next to a dev `corral-app`, where the sibling rule prefers it over a real CLI
+  and every `corral` call exits 127. Do **not** switch
   this to `bundle.macos.files`: Tauri copies those under `Contents/` but does not add
   them to its signing list, so a nested Mach-O stays unsigned and breaks
   notarization/`codesign --verify`. `bin::corral_cli_path()` resolves the
   executable as a sibling of `current_exe` (dev `target/debug/corral`, bundled
   `Contents/MacOS/corral`, `/usr/bin/corral`), falling back to `$PATH`;
   `start_session` bakes that absolute path into Claude hook commands (the hook
-  shell on macOS never has the bundle dir on `PATH`) and prepends its directory
+  shell on macOS never has the bundle dir on `PATH`) — but only while Claude is
+  the harness; switching to OpenCode/Pi removes them again
+  (`hooks::HookCli::Remove`) — and prepends its directory
   to the agent PTY's `PATH` so `corral rename/list/done/awake` work.
   `bin::hook_cli_path()` returns `None` inside an AppImage, whose mount path
   changes every launch, and `merge_hooks` replaces a stale managed entry rather

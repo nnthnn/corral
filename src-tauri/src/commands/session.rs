@@ -612,12 +612,13 @@ pub async fn start_session(
     let settings = corral_core::settings::load().str_err()?;
     let project_settings = corral_core::project_settings::get(&project).str_err()?;
 
-    // Write Claude Code's status hooks only when Claude is the harness in use.
-    // Other harnesses never run them, so for an OpenCode/Pi-only project this
-    // would otherwise put an absolute `corral notify-hook …` command into the
-    // repo's `.claude/settings.local.json` for no benefit — and that path goes
-    // stale when the app moves. Switching a project to Claude installs them on
-    // its next session start.
+    // Claude Code's status hooks live in the repo's
+    // `.claude/settings.local.json` only while Claude is the harness in use.
+    // OpenCode and Pi never run them, so switching to one *removes* them
+    // rather than leaving an absolute `corral notify-hook …` path (stale as
+    // soon as the app moves) in the user's repo for no benefit. A harness value
+    // from a newer corral (`Unknown`) is left alone: it fails further down
+    // without launching anything, so there's no run to configure for.
     //
     // `.claude/settings.local.json` is symlinked from every worktree back to
     // the main repo (`worktree::link_claude_dir`), so this is written once per
@@ -630,16 +631,25 @@ pub async fn start_session(
     // Claude's shell, which on macOS never has the app bundle's
     // `Contents/MacOS` on `PATH`. An AppImage keeps the bare `corral` name
     // (its mount path changes every launch); see `bin::hook_cli_path`.
-    if settings.harness == corral_core::harness::Harness::Claude {
+    let cli_path = corral_core::bin::hook_cli_path();
+    let hook_cli = match settings.harness {
+        corral_core::harness::Harness::Opencode
+        | corral_core::harness::Harness::Opencode2
+        | corral_core::harness::Harness::Pi => Some(corral_core::hooks::HookCli::Remove),
+        corral_core::harness::Harness::Claude => Some(match cli_path.as_deref() {
+            Some(cli) => corral_core::hooks::HookCli::Absolute(cli),
+            None => corral_core::hooks::HookCli::Name,
+        }),
+        corral_core::harness::Harness::Unknown(_) => None,
+    };
+    if let Some(hook_cli) = hook_cli {
         let repo_claude_settings = config::repo_path(&project)
             .str_err()?
             .join(".claude")
             .join("settings.local.json");
-        if let Err(e) = corral_core::hooks::ensure_hooks_installed(
-            &repo_claude_settings,
-            corral_core::bin::hook_cli_path().as_deref(),
-        ) {
-            tracing::warn!("start_session: failed to install status hooks: {e}");
+        if let Err(e) = corral_core::hooks::ensure_hooks_installed(&repo_claude_settings, hook_cli)
+        {
+            tracing::warn!("start_session: failed to update status hooks: {e}");
         }
     }
 

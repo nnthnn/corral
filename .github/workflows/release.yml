@@ -108,31 +108,48 @@ jobs:
       - name: Build release bundles
         run: pnpm tauri build
 
-      # The stager (`scripts/stage-cli-sidecar.sh`) already refuses to leave
-      # the build.rs placeholder in place, but assert on the *packaged* CLI too:
-      # the placeholder would still let every bundle build successfully and only
-      # fail later, at every Claude Code status hook (exit 127). A deb is an
-      # `ar` archive of tarballs, so extract and check the installed copy.
+      # The sidecar is now the *only* way the CLI reaches the packages (the
+      # `bundle.linux.*.files` entries are gone), so assert on the packaged
+      # copy in every format. A missing or stubbed `corral` still lets all three
+      # bundles build successfully and only fails later — at every Claude Code
+      # status hook, or for the AppImage at every `corral` invocation, with
+      # exit 127.
       - name: Verify the bundled CLI is the real executable
         run: |
+          check_cli() {
+            local label="$1" path="$2"
+            if [[ ! -f "$path" ]]; then
+              echo "error: $label does not ship usr/bin/corral" >&2
+              exit 1
+            fi
+            # chmod: extracted files can lose the bit, and an AppImage always
+            # carries it, so don't fail on packaging metadata alone.
+            chmod +x "$path"
+            "$path" --version >/dev/null || {
+              echo "error: $label's corral does not run: $(file -b "$path")" >&2
+              exit 1
+            }
+            echo "$label: $("$path" --version)"
+          }
+
+          work="$RUNNER_TEMP/verify"
+          mkdir -p "$work"
+
           deb="$(ls target/release/bundle/deb/*.deb | head -n1)"
-          mkdir -p "$RUNNER_TEMP/deb"
-          dpkg-deb -x "$deb" "$RUNNER_TEMP/deb"
-          cli="$RUNNER_TEMP/deb/usr/bin/corral"
-          if [[ ! -x "$cli" ]]; then
-            echo "error: $deb does not install /usr/bin/corral" >&2
-            exit 1
-          fi
-          status=0
-          grep -qF "this bundle was built without the CLI sidecar" "$cli" || status=$?
-          if [[ "$status" -eq 0 ]]; then
-            echo "error: $cli is the build.rs placeholder" >&2
-            exit 1
-          elif [[ "$status" -ne 1 ]]; then
-            echo "error: could not read $cli to verify it" >&2
-            exit 1
-          fi
-          "$cli" --version
+          dpkg-deb -x "$deb" "$work/deb"
+          check_cli deb "$work/deb/usr/bin/corral"
+
+          rpm="$(ls target/release/bundle/rpm/*.rpm | head -n1)"
+          (cd "$work" && rpm2cpio "$rpm" | cpio -idm --quiet)
+          check_cli rpm "$work/usr/bin/corral"
+
+          # An AppImage is a squashfs image appended to a shell stub, mounted at
+          # a fresh /tmp/.mount_* path on every launch — which is exactly why
+          # `bin::hook_cli_path` keeps the bare `corral` name for it. Extract
+          # the payload rather than mounting, so no FUSE is needed in CI.
+          appimage="$(readlink -f "$(ls target/release/bundle/appimage/*.AppImage | head -n1)")"
+          (cd "$work" && "$appimage" --appimage-extract >/dev/null)
+          check_cli appimage "$work/squashfs-root/usr/bin/corral"
 
       - name: Upload Linux bundles
         uses: actions/upload-artifact@v7

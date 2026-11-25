@@ -42,12 +42,6 @@ if [[ "${TAURI_ENV_DEBUG:-}" == "true" ]]; then
   cargo_args=(build -p corral-cli "${locked[@]}")
 fi
 
-# The message `src-tauri/build.rs` writes into its compile-time placeholder.
-# Stage a real CLI over it below; the check at the end refuses to leave one in
-# place, because a bundle carrying the placeholder builds fine but silently
-# breaks every Claude Code status hook.
-placeholder_marker="this bundle was built without the CLI sidecar"
-
 target_dir="${CARGO_TARGET_DIR:-target}"
 mkdir -p src-tauri/binaries
 destination="src-tauri/binaries/corral-$triple"
@@ -76,17 +70,15 @@ fi
 
 chmod +x "$destination"
 
-# A successful build should always have replaced the placeholder, but a stale
-# `cp` path or a partial checkout could leave it. Fail loudly here rather than
-# shipping hooks that exit 127. `grep` exits 1 for "no match", 2 for an error.
-status=0
-grep -qF "$placeholder_marker" "$destination" || status=$?
-if [[ "$status" -eq 0 ]]; then
-  echo "error: $destination is still the build.rs placeholder, not the real CLI" >&2
-  exit 1
-elif [[ "$status" -ne 1 ]]; then
-  echo "error: could not read $destination to verify it" >&2
+# A successful build should always produce a runnable CLI, but a stale path or a
+# partially configured target dir could leave an old copy in place — and a broken
+# `corral` in the bundle builds fine and only fails later, at every Claude Code
+# status hook (or at every `corral` invocation from an AppImage). Refuse to
+# stage something that doesn't even report its version.
+if ! "$destination" --version >/dev/null 2>&1; then
+  echo "error: $destination does not run (a sidecar with the wrong arch?):" >&2
+  file "$destination" >&2 || true
   exit 1
 fi
 
-echo "staged sidecar: $destination"
+echo "staged sidecar: $destination ($("$destination" --version))"

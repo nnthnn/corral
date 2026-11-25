@@ -140,13 +140,18 @@ const PATH_SEPARATOR: char = ':';
 /// `Command` treats these the same way (a `PATH` search only happens for names
 /// without separators).
 fn is_path(bin: &str) -> bool {
-    bin.contains(std::path::MAIN_SEPARATOR)
+    if bin.contains(std::path::MAIN_SEPARATOR)
         || bin.contains('/')
         || bin.starts_with('.')
         || bin.starts_with('~')
-        // `C:foo` and `\\server\share` are paths on Windows, not names.
-        || (bin.len() > 1 && bin.as_bytes()[1] == b':')
-        || bin.starts_with(r"\\")
+    {
+        return true;
+    }
+    // `C:foo` and `\\server\share` are paths on Windows, not names. Gated so a
+    // Unix name that merely has a `:` in it (a configured executable such as
+    // `tool:+backend`) still resolves against `$PATH` instead of being treated
+    // as a literal, non-existent path.
+    cfg!(windows) && (bin.as_bytes().get(1) == Some(&b':') || bin.starts_with(r"\\"))
 }
 
 /// Whether `path` is a file this process could execute.
@@ -379,6 +384,8 @@ mod tests {
         }
         assert!(!is_path("corral"));
         assert!(!is_path("opencode"));
+        // A `:` isn't a path on Unix — only on Windows is it a drive prefix.
+        assert_eq!(is_path("tool:+backend"), cfg!(windows));
     }
 
     #[test]

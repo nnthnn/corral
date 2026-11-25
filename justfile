@@ -5,7 +5,16 @@ default:
 frontend:
     pnpm build
 
-# Compile-check the whole Rust workspace
+# `bundle.externalBin` makes tauri-build copy the CLI sidecar next to the binary
+# at compile time, and *fail* when it is missing — so a fresh checkout can't
+# even `cargo check` until `just bundle` has staged one. Exporting an emptied
+# `externalBin` for every recipe here skips that copy (build.rs adds a hint to
+# the leftover error), and `build` / `build-release` compile the CLI into the
+# same profile dir so `bin::corral_cli_path` finds the real thing as a sibling.
+no-sidecar := '{"bundle":{"externalBin":[]}}'
+export TAURI_CONFIG := no-sidecar
+
+# Compile-check the whole Rust workspace (no sidecar needed)
 check:
     cargo check --workspace
 
@@ -52,7 +61,9 @@ install-hooks:
     git config core.hooksPath .githooks
     chmod +x .githooks/*
 
-# Build a real standalone binary fast, skipping the tauri-cli bundler (see CLAUDE.md)
+# Build a real standalone binary fast, skipping the tauri-cli bundler (see CLAUDE.md).
+# The CLI is built into the same profile dir, so `bin::corral_cli_path` finds it
+# as a sibling of `corral-app` (which is what the session PATH relies on).
 build: frontend
     cargo build -p corral-app --features tauri/custom-protocol
     cargo build -p corral-cli

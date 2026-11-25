@@ -14,41 +14,26 @@ fn git_sha() -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-/// `bundle.externalBin` makes `tauri-build` require the sidecar to exist at
-/// **compile** time, so a plain `cargo check` in a fresh checkout would fail
-/// before the bundler ever runs (and `cargo check --workspace` is part of
-/// `just ci`). Create a loud placeholder when the real CLI hasn't been staged.
+/// `bundle.externalBin` makes `tauri-build` copy the CLI sidecar next to the
+/// compiled binary and **fail when it is missing** — even for a plain
+/// `cargo check`, which is part of `just ci`. The real sidecar is only staged
+/// by `scripts/stage-cli-sidecar.sh` (via `build.beforeBundleCommand`), so a
+/// fresh checkout has none.
 ///
-/// `scripts/stage-cli-sidecar.sh` — via `build.beforeBundleCommand` — runs
-/// after the app is compiled but before the bundler copies the sidecar, so it
-/// overwrites this. The placeholder can only reach a bundle if that hook is
-/// removed or skipped; it exits 127 with a clear message instead of silently
-/// pretending to be the CLI. `src-tauri/binaries/` is gitignored.
-fn ensure_sidecar_placeholder() {
-    let Ok(triple) = std::env::var("TARGET") else {
-        return;
-    };
-    let suffix = if triple.contains("windows") {
-        format!("corral-{triple}.exe")
-    } else {
-        format!("corral-{triple}")
-    };
-    let dir = std::path::Path::new("binaries");
-    let path = dir.join(suffix);
-    if path.exists() {
-        return;
-    }
-
-    const STUB: &str = "#!/bin/sh\n\
-        echo 'corral: this bundle was built without the CLI sidecar (run `just bundle`)' >&2\n\
-        exit 127\n";
-    if std::fs::create_dir_all(dir).is_ok() && std::fs::write(&path, STUB).is_ok() {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
-        }
-    }
+/// Rather than writing a stub into `src-tauri/binaries/` — which then gets
+/// copied next to a dev `corral-app`, where `bin::corral_cli_path` prefers it
+/// as a sibling over a real CLI on `$PATH` — print the file that's expected and
+/// let the build fail. Both supported paths avoid this entirely:
+/// `just check` / `just build` set `TAURI_CONFIG` to an empty `externalBin`,
+/// and `just bundle` stages the real CLI first.
+fn with_sidecar_hint(err: tauri_build::Result<()>) -> tauri_build::Result<()> {
+    let triple = std::env::var("TARGET").unwrap_or_else(|_| "<target-triple>".into());
+    err.map_err(|err| {
+        err.context(format!(
+            "the `corral` CLI sidecar is missing: expected src-tauri/binaries/corral-{triple}. \
+             `just bundle` stages it; `just check` / `just build` skip the copy."
+        ))
+    })
 }
 
 fn main() {
@@ -56,10 +41,8 @@ fn main() {
     println!("cargo:rerun-if-changed=../.git/HEAD");
     println!("cargo:rerun-if-changed=../.git/index");
 
-    ensure_sidecar_placeholder();
-
-    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
-        tauri_build::AppManifest::new().commands(&[
+    with_sidecar_hint(tauri_build::try_build(
+        tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
             "notify_icon",
             "send_notification",
             "home_dir",
@@ -127,7 +110,7 @@ fn main() {
             "browser_go_forward",
             "browser_reload",
             "browser_refresh_titles",
-        ]),
+        ])),
     ))
     .expect("failed to run tauri-build");
 }
