@@ -103,35 +103,70 @@ fn sibling_executable(dir: &Path, name: &str) -> Option<PathBuf> {
 /// Used to make the bundled CLI callable from an agent's shell without losing
 /// a project-configured `PATH` (nvm, toolchains, …). A no-op when `dir` is
 /// already the first entry, and an empty `base` yields just `dir` (rather than
-/// a trailing `:` that would put the current directory on `PATH`).
+/// a trailing separator that would put the current directory on `PATH`).
+///
+/// Platform-aware: `:` separates entries on Unix and `;` on Windows (which
+/// `std::env::join_paths` handles, including quoting), so this does not
+/// hardcode the separator.
 pub fn prepend_to_path(dir: &Path, base: &str) -> String {
-    let dir_str = dir.to_string_lossy();
-    if base.is_empty() || base.split(':').next() == Some(dir_str.as_ref()) {
-        return if base.is_empty() {
-            dir_str.into_owned()
-        } else {
-            base.to_string()
-        };
+    let mut entries: Vec<PathBuf> = Vec::new();
+    if base.is_empty() {
+        entries.push(dir.to_path_buf());
+    } else {
+        entries.extend(std::env::split_paths(base));
+        // Already first: hand back the caller's string untouched rather than a
+        // re-serialized one that might quote differently.
+        if entries.first().is_some_and(|first| first == dir) {
+            return base.to_string();
+        }
+        entries.insert(0, dir.to_path_buf());
     }
-    format!("{dir_str}:{base}")
+    std::env::join_paths(entries)
+        .map(|joined| joined.to_string_lossy().into_owned())
+        // An empty `base` keeps this infallible; a `base` that `split_paths`
+        // mis-parsed (e.g. a stray quote on Windows) falls back to a plain
+        // separator join, which is still better than dropping the CLI.
+        .unwrap_or_else(|_| format!("{}{}{}", dir.to_string_lossy(), PATH_SEPARATOR, base))
 }
+
+/// The platform's `PATH` entry separator.
+#[cfg(windows)]
+const PATH_SEPARATOR: char = ';';
+#[cfg(not(windows))]
+const PATH_SEPARATOR: char = ':';
 
 /// A string that looks like a path rather than a bare command name — anything
-/// with a separator, or a leading `.`/`/`/`~`. `Command` treats these the
-/// same way (a `PATH` search only happens for names without separators).
+/// with a separator, a Windows drive/UNC prefix, or a leading `.`/`/`/`~`.
+/// `Command` treats these the same way (a `PATH` search only happens for names
+/// without separators).
 fn is_path(bin: &str) -> bool {
     bin.contains(std::path::MAIN_SEPARATOR)
+        || bin.contains('/')
         || bin.starts_with('.')
-        || bin.starts_with('/')
         || bin.starts_with('~')
+        // `C:foo` and `\\server\share` are paths on Windows, not names.
+        || (bin.len() > 1 && bin.as_bytes()[1] == b':')
+        || bin.starts_with(r"\\")
 }
 
+/// Whether `path` is a file this process could execute.
+///
+/// On Unix the executable bit decides. Windows has no such bit — `CreateProcess`
+/// goes by extension — so any existing file counts, with the `$PATHEXT` idea
+/// left to the caller's spawn.
 fn exists_and_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
 
-    std::fs::metadata(path)
-        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
+        std::fs::metadata(path)
+            .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::metadata(path).is_ok_and(|m| m.is_file())
+    }
 }
 
 /// A human-readable error for "the agent binary can't be found", naming what
@@ -311,6 +346,39 @@ mod tests {
         };
 
         assert_eq!(cli_for_app(&app), Some(on_path));
+    }
+
+    #[test]
+    fn prepend_to_path_round_trips_through_the_platform_separator() {
+        // The result must split back into the same entries, whatever the
+        // platform separator is (`:` on Unix, `;` on Windows).
+        let dir = Path::new("/opt/corral/bin");
+        let base = std::env::join_paths(["/usr/bin", "/bin"]).unwrap();
+        let joined = prepend_to_path(dir, &base.to_string_lossy());
+        let parts: Vec<PathBuf> = std::env::split_paths(&joined).collect();
+        assert_eq!(
+            parts,
+            vec![
+                PathBuf::from("/opt/corral/bin"),
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/bin")
+            ]
+        );
+    }
+
+    #[test]
+    fn is_path_recognises_separators_and_roots() {
+        assert!(is_path("/usr/bin/corral"));
+        assert!(is_path("./corral"));
+        assert!(is_path("~/bin/corral"));
+        #[cfg(windows)]
+        {
+            assert!(is_path(r"C:\Tools\corral.exe"));
+            assert!(is_path("C:corral"));
+            assert!(is_path(r"\\server\share\corral.exe"));
+        }
+        assert!(!is_path("corral"));
+        assert!(!is_path("opencode"));
     }
 
     #[test]

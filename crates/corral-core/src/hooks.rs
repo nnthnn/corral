@@ -133,7 +133,7 @@ fn is_corral_hook_command(command: &str) -> bool {
     let words = shell_words(command);
     words.len() >= 2
         && Path::new(&words[0])
-            .file_name()
+            .file_stem()
             .is_some_and(|name| name == "corral")
         && words[1] == "notify-hook"
 }

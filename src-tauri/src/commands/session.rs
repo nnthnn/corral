@@ -609,30 +609,39 @@ pub async fn start_session(
         return Err(format!("worktree path does not exist: {}", path.display()));
     }
 
+    let settings = corral_core::settings::load().str_err()?;
+    let project_settings = corral_core::project_settings::get(&project).str_err()?;
+
+    // Write Claude Code's status hooks only when Claude is the harness in use.
+    // Other harnesses never run them, so for an OpenCode/Pi-only project this
+    // would otherwise put an absolute `corral notify-hook …` command into the
+    // repo's `.claude/settings.local.json` for no benefit — and that path goes
+    // stale when the app moves. Switching a project to Claude installs them on
+    // its next session start.
+    //
     // `.claude/settings.local.json` is symlinked from every worktree back to
-    // the main repo (`worktree::link_claude_dir`), so this is written once
-    // per project and is safe to call on every session start — it's a
-    // no-op once the hooks are already present, and replaces a stale CLI path
-    // when the app moved or switched between dev and bundled builds (see
+    // the main repo (`worktree::link_claude_dir`), so this is written once per
+    // project and is safe to call on every session start — it's a no-op once
+    // the hooks are already present, and replaces a stale CLI path when the app
+    // moved or switched between dev and bundled builds (see
     // `hooks::merge_hooks`).
     //
     // The CLI path is absolute on normal installs because the hook runs in
     // Claude's shell, which on macOS never has the app bundle's
     // `Contents/MacOS` on `PATH`. An AppImage keeps the bare `corral` name
     // (its mount path changes every launch); see `bin::hook_cli_path`.
-    let repo_claude_settings = config::repo_path(&project)
-        .str_err()?
-        .join(".claude")
-        .join("settings.local.json");
-    if let Err(e) = corral_core::hooks::ensure_hooks_installed(
-        &repo_claude_settings,
-        corral_core::bin::hook_cli_path().as_deref(),
-    ) {
-        tracing::warn!("start_session: failed to install status hooks: {e}");
+    if settings.harness == corral_core::harness::Harness::Claude {
+        let repo_claude_settings = config::repo_path(&project)
+            .str_err()?
+            .join(".claude")
+            .join("settings.local.json");
+        if let Err(e) = corral_core::hooks::ensure_hooks_installed(
+            &repo_claude_settings,
+            corral_core::bin::hook_cli_path().as_deref(),
+        ) {
+            tracing::warn!("start_session: failed to install status hooks: {e}");
+        }
     }
-
-    let settings = corral_core::settings::load().str_err()?;
-    let project_settings = corral_core::project_settings::get(&project).str_err()?;
 
     // A non-empty saved title means this worktree was already named (via
     // `corral rename`, by this or a previous session). Passed to the

@@ -227,16 +227,15 @@ executable`). An Intel user can build a fully fat dmg with `just universal`,
 which lipos both the app and the bundled CLI and prints `lipo -archs` for every
 nested executable.
 
-Alternatively, run the Release workflow by hand with `build_macos` ticked
-(Actions → Release → Run workflow) and attach the resulting
-`macos-bundles` artifact to the release. That job is `continue-on-error` and
-opt-in, so it can never block or cancel a Linux release; it builds the host
-(arm64) dmg.
-
-macOS signing + notarization is still opt-in via repository secrets
-(`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`,
-`APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`); with none configured the dmg is
-unsigned and needs Gatekeeper's right-click → Open on first launch.
+There is no macOS job in the release workflow at all — the `.dmg` is always a
+manual build on a Mac. macOS signing + notarization is opt-in via repository
+secrets (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
+`APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`); for a
+local `just bundle` they're read from the environment, and with none set the
+dmg is unsigned and needs Gatekeeper's right-click → Open on first launch.
+Because the dmg is only built locally, nothing in CI packages the macOS
+sidecar — if `stage-cli-sidecar.sh` or `build.rs` breaks only on macOS, the
+manual build is where it shows up.
 
 There is deliberately **no macOS job in `ci.yml`**: it would never run, and a
 green check that silently means "macOS was never compiled" is worse than none.
