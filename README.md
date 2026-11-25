@@ -190,6 +190,9 @@ Implemented:
 - **Git/PR integration**: fast-forward merge a worktree's branch into its
   base, or push and open/update a GitHub PR via `gh`, with live CI checks in
   the PR tab.
+- **Linear tickets + attachments**: look up a ticket by ID or title from the
+  header (or the command palette) and attach its body to the running agent.
+  Drop files on the terminal to attach their paths.
 - **File browsing**: a File tab with image, SVG, and Markdown preview.
 - Per-project settings, per-worktree free-text notes, and desktop
   notifications.

@@ -588,6 +588,12 @@ See `IDEAS.md` for the backlog. As of the latest work, implemented:
   Markdown previews.
 - **Git/PR integration**: fast-forward merge of a worktree's branch into its
   base, and push + open/update a GitHub PR via `gh`, with live CI checks.
+- **Linear tickets + attachments**: the header's ticket button (also in the
+  command palette) searches Linear with a personal API key from Settings and
+  attaches the chosen ticket's body to the active session — written to a temp
+  file via `save_text_attachment` and referenced by path, the same pattern the
+  PR/checks "Add to chat" actions use. Dropping OS files on the terminal (or
+  pasting a clipboard image) inserts their quoted paths.
 - **Per-project settings**, per-worktree free-text notes (sidebar subtitle,
   untracked), and desktop notifications (with cowboy flair 🤠). Provisioning
   files and the setup command are configured per project; the setup command

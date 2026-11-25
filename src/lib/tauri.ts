@@ -6,6 +6,8 @@ import type {
   FileContent,
   FileEntry,
   GitStatus,
+  LinearIssue,
+  LinearIssueSummary,
   MergePrResult,
   MergeResult,
   PlatformDefaults,
@@ -186,6 +188,11 @@ interface CommandMap {
   copy_diagnostics: { args: undefined; result: string };
   save_pasted_image: { args: { bytes: number[] }; result: string };
   save_text_attachment: { args: { text: string }; result: string };
+  linear_search: {
+    args: { apiKey: string; query: string; limit?: number };
+    result: LinearIssueSummary[];
+  };
+  linear_issue: { args: { apiKey: string; id: string }; result: LinearIssue };
   open_in_zed: {
     args: { path: string; editorCommand: string };
     result: undefined;

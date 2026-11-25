@@ -44,6 +44,7 @@ export const DEFAULT_SETTINGS: Settings = {
   opencode2_executable_path: "",
   pi_executable_path: "",
   browser_enabled: true,
+  linear_api_key: "",
 };
 
 export type TabId = "agent" | "run" | "setup" | "pr" | "diff" | "file";
@@ -114,6 +115,8 @@ export interface AppState {
   /** Whether the command palette (Ctrl/Cmd+K) is open — a full-window
    * overlay for type-ahead worktree switching and a few global actions. */
   paletteOpen: boolean;
+  /** Whether the Linear ticket picker is open. See `LinearIssueDialog`. */
+  linearDialogOpen: boolean;
   /** `true` when the compositor/WM did not grant real window decorations
    * (e.g. Hyprland) — set once at startup by `bootstrap()`. Drives whether
    * `WindowControls` renders its own minimize/maximize/close buttons. */
@@ -257,6 +260,7 @@ export const useStore = create<AppState>(() => ({
   fileError: null,
   settingsOpen: false,
   paletteOpen: false,
+  linearDialogOpen: false,
   needsCustomChrome: false,
   filterText: "",
   attentionOnly: false,

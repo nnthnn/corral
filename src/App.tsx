@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { ChangesPane } from "./components/ChangesPane";
 import { CommandPalette } from "./components/CommandPalette";
 import { DeleteDialog } from "./components/DeleteDialog";
+import { LinearIssueDialog } from "./components/LinearIssueDialog";
 import { MainPane } from "./components/MainPane";
 import { NewProjectDialog } from "./components/NewProjectDialog";
 import { ProjectSettingsDialog } from "./components/ProjectSettingsDialog";
@@ -96,6 +97,7 @@ export function App() {
       <ProjectSettingsDialog />
       <RemoveProjectDialog />
       <NewProjectDialog />
+      <LinearIssueDialog />
       <CommandPalette />
       <ToastHost />
       <WindowControls />

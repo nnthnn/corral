@@ -77,6 +77,8 @@ fn main() {
             "refresh_worktree_status",
             "save_pasted_image",
             "save_text_attachment",
+            "linear_search",
+            "linear_issue",
             "open_in_zed",
             "open_terminal",
             "get_settings",

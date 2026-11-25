@@ -12,6 +12,7 @@ import {
   Square,
   StepForward,
   Terminal,
+  Ticket,
   Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -197,6 +198,14 @@ function MainHeadActions({
             </Button>
           </>
         )}
+        <Button
+          variant="ghost"
+          icon
+          title="Attach Linear ticket"
+          onClick={() => useStore.setState({ linearDialogOpen: true })}
+        >
+          <Ticket size={16} />
+        </Button>
         <Button
           variant="ghost"
           icon

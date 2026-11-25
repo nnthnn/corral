@@ -5,6 +5,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  Ticket,
 } from "lucide-react";
 import {
   type KeyboardEvent,
@@ -21,7 +22,12 @@ import type { Worktree } from "../types";
 import { orderProjects, worktreeTitle, wtId } from "../utils";
 import { Highlight } from "./Highlight";
 
-type ActionId = "settings" | "refresh" | "add-project" | "new-project";
+type ActionId =
+  | "settings"
+  | "refresh"
+  | "add-project"
+  | "new-project"
+  | "linear";
 
 interface Action {
   kind: "action";
@@ -44,6 +50,12 @@ const ACTIONS: Action[] = [
     label: "New project",
     Icon: FolderGit2,
   },
+  {
+    kind: "action",
+    id: "linear",
+    label: "Attach Linear ticket",
+    Icon: Ticket,
+  },
 ];
 
 function close(): void {
@@ -55,6 +67,7 @@ function runAction(id: ActionId): void {
   else if (id === "refresh") loadAll();
   else if (id === "add-project") void addProject();
   else if (id === "new-project") openNewProjectDialog();
+  else if (id === "linear") useStore.setState({ linearDialogOpen: true });
 }
 
 /** Match the same fields the sidebar filter does, so palette behavior doesn't

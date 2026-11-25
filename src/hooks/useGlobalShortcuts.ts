@@ -110,7 +110,8 @@ function handleEscape(e: KeyboardEvent): void {
     s.deleteTarget ||
     s.renameTarget ||
     s.projectSettingsTarget ||
-    s.removeProjectTarget;
+    s.removeProjectTarget ||
+    s.linearDialogOpen;
   if (s.paletteOpen) useStore.setState({ paletteOpen: false });
   else if (s.settingsOpen) useStore.setState({ settingsOpen: false });
   else if (modalOpen) return;

@@ -411,9 +411,14 @@ export class SessionManager {
   }
 
   private handleDrop(paths: string[], position: { x: number; y: number }) {
-    if (!paths.length || !this.activeId || !this.overTerminal(position)) return;
-    const entry = this.entries.get(this.activeId);
-    if (!entry) return;
+    if (!paths.length || !this.overTerminal(position)) return;
+    const entry = this.activeId ? this.entries.get(this.activeId) : undefined;
+    if (!entry) {
+      // Not silently ignoring the drop (the old behavior): dropping files is
+      // a deliberate gesture, so say why nothing happened.
+      showError("Start the agent first, then drop files to attach them.");
+      return;
+    }
     entry.term.paste(`${paths.map((p) => `"${p}"`).join(" ")} `);
     entry.term.focus();
   }
@@ -516,6 +521,19 @@ export class SessionManager {
     } catch {
       /* already gone */
     }
+  }
+
+  /** Insert `text` into the active session's input without submitting it —
+   * used by "attach this to the agent" actions (Linear tickets) where the
+   * user still wants to type their own instruction before pressing Enter.
+   * Returns false when there's no active session. */
+  insertToActive(text: string): boolean {
+    if (!this.activeId) return false;
+    const entry = this.entries.get(this.activeId);
+    if (!entry) return false;
+    entry.term.paste(text);
+    entry.term.focus();
+    return true;
   }
 
   /** Paste `text` into the currently active session's terminal, as if it

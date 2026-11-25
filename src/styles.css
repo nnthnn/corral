@@ -352,6 +352,15 @@
     outline-offset: -2px;
   }
 
+  /* Dropping a file on the terminal types its quoted path into the agent's
+     input. Make that gesture discoverable: the outline alone doesn't say what
+     will happen, or even that dropping is supported. */
+  .terminals.drag-over::after {
+    content: "Drop files to attach them to the agent";
+    @apply absolute inset-0 flex items-center justify-center pointer-events-none text-label font-semibold text-primary;
+    background: color-mix(in srgb, var(--color-bg) 72%, transparent);
+  }
+
   .tab {
     @apply flex items-center gap-2 py-2 px-6 bg-surface-2/40 text-muted cursor-pointer text-body rounded-t-md border-b-2 border-transparent transition-colors duration-150;
   }
@@ -623,6 +632,9 @@ body.suspend-hover * {
   }
   #project-settings-dialog {
     width: min(760px, 90vw);
+  }
+  #linear-issue-dialog {
+    width: min(640px, 92vw);
   }
   dialog form {
     @apply p-5 flex flex-col gap-4;

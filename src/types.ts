@@ -227,6 +227,34 @@ export interface Settings {
   /** Attach corral's embedded browser host to OpenCode v2 sessions, which is
    * what enables OpenCode's `browser.*` tools. On by default. */
   browser_enabled: boolean;
+  /** Personal Linear API key used by the "Attach Linear ticket" action.
+   * Empty means the integration isn't configured. Stored in plain text in
+   * `settings.json`, like every other preference. */
+  linear_api_key: string;
+}
+
+/** One row in the Linear ticket picker. */
+export interface LinearIssueSummary {
+  id: string;
+  identifier: string;
+  title: string;
+  url: string;
+  state: string | null;
+  team: string | null;
+}
+
+/** A full Linear ticket, including the description attached to the agent. */
+export interface LinearIssue {
+  id: string;
+  identifier: string;
+  title: string;
+  description: string | null;
+  url: string;
+  state: string | null;
+  team: string | null;
+  assignee: string | null;
+  priority: string | null;
+  labels: string[];
 }
 
 export interface ProjectSettings {

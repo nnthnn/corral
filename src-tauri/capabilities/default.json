@@ -50,6 +50,8 @@
     "allow-refresh-worktree-status",
     "allow-save-pasted-image",
     "allow-save-text-attachment",
+    "allow-linear-search",
+    "allow-linear-issue",
     "allow-open-in-zed",
     "allow-open-terminal",
     "allow-get-settings",

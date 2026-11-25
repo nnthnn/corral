@@ -206,6 +206,8 @@ pub fn run() {
             commands::worktrees::refresh_worktree_status,
             commands::system::save_pasted_image,
             commands::system::save_text_attachment,
+            commands::linear::linear_search,
+            commands::linear::linear_issue,
             commands::system::open_in_zed,
             commands::system::open_terminal,
             commands::settings::get_settings,

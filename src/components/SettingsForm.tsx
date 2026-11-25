@@ -61,6 +61,9 @@ export function SettingsForm() {
   const [piExecutablePath, setPiExecutablePath] = useState(
     initial.pi_executable_path,
   );
+  const [linearApiKey, setLinearApiKey] = useState(
+    initial.linear_api_key ?? "",
+  );
   const [extraInstructions, setExtraInstructions] = useState(
     initial.extra_instructions,
   );
@@ -221,6 +224,7 @@ export function SettingsForm() {
       opencode_executable_path: opencodeExecutablePath.trim(),
       opencode2_executable_path: opencode2ExecutablePath.trim(),
       pi_executable_path: piExecutablePath.trim(),
+      linear_api_key: linearApiKey.trim(),
     };
     try {
       useStore.setState({ settings: updated });
@@ -544,6 +548,22 @@ export function SettingsForm() {
                 Default "Also delete branch" to checked when removing a worktree
               </span>
             </label>
+            <label>
+              Linear API key
+              <input
+                type="password"
+                placeholder="lin_api_…"
+                autoComplete="off"
+                value={linearApiKey}
+                onChange={(e) => setLinearApiKey(e.target.value)}
+              />
+            </label>
+            <p className="hint">
+              Enables the header's ticket button and the command palette's
+              "Attach Linear ticket". Create a personal key under Linear →
+              Settings → Security &amp; access → Personal API keys. Stored in
+              plain text in this machine's <code>settings.json</code>.
+            </p>
           </div>
           <div className={styles.column}>
             <h3 className={styles.columnHeading}>Notifications &amp; Power</h3>

@@ -16,6 +16,7 @@ pub mod harness;
 pub mod hooks;
 pub mod json_store;
 pub mod keyed_store;
+pub mod linear;
 pub mod log_err;
 pub mod merge;
 pub mod names;

@@ -144,6 +144,11 @@ pub struct Settings {
     /// leaves the tools unavailable — useful for users who never want them, or
     /// as a switch if a future opencode release changes the protocol.
     pub browser_enabled: bool,
+    /// Personal Linear API key, used by the header's ticket-lookup command to
+    /// read issue titles/bodies. Empty means "Linear integration not set up".
+    /// Stored in plain text in `settings.json`, like every other preference —
+    /// the Settings field warns about that.
+    pub linear_api_key: String,
 }
 
 impl Default for Settings {
@@ -178,6 +183,7 @@ impl Default for Settings {
             opencode2_executable_path: String::new(),
             pi_executable_path: String::new(),
             browser_enabled: true,
+            linear_api_key: String::new(),
         }
     }
 }
@@ -399,6 +405,7 @@ mod tests {
             opencode2_executable_path: String::new(),
             pi_executable_path: "/opt/pi/bin/pi".into(),
             browser_enabled: false,
+            linear_api_key: "lin_api_test".into(),
         };
 
         save_under(&path, &s).unwrap();
@@ -436,6 +443,18 @@ mod tests {
         );
         assert_eq!(loaded.pi_executable_path, s.pi_executable_path);
         assert_eq!(loaded.browser_enabled, s.browser_enabled);
+        assert_eq!(loaded.linear_api_key, s.linear_api_key);
+    }
+
+    #[test]
+    fn linear_api_key_defaults_to_empty_string() {
+        let s = Settings::default();
+        assert_eq!(s.linear_api_key, "");
+
+        // Simulates a settings.json written before this field existed.
+        let json = r#"{"editor_command":"zeditor"}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.linear_api_key, "");
     }
 
     #[test]
