@@ -253,6 +253,10 @@ on a Mac — keep that in mind when touching `process.rs`, `caffeinate.rs`, or
   `systemd-inhibit` on Linux, `caffeinate` on macOS, or
   `SetThreadExecutionState` on Windows for the worker's lifetime. Wrap the
   worker, not a launcher that exits immediately.
+- **Credential storage is `corral-core::secret`, not `Settings`.** Anything
+  secret goes through `secret::set/get/clear` with the config dir, never into
+  `settings.json` (which is re-serialized on every toggle and snapshotted to
+  `.bak`). Every store file and backup is written `0600`.
 - **Rust changes need a full app restart.** Vite HMR only reloads the
   frontend; new/changed Tauri commands or Rust logic won't take effect until
   the binary rebuilds (e.g. `just run`). Frontend-only changes hot-reload
@@ -338,7 +342,18 @@ on a Mac — keep that in mind when touching `process.rs`, `caffeinate.rs`, or
   to the agent PTY's `PATH` so `corral rename/list/done/awake` work.
   `bin::hook_cli_path()` returns `None` inside an AppImage, whose mount path
   changes every launch, and `merge_hooks` replaces a stale managed entry rather
-  than accumulating another. Don't use `resource_dir()`/
+  than accumulating another.
+  **The staging script must stay bash-3.2-safe**, because on a Mac it runs
+  under `/bin/bash` 3.2 (Apple's last GPLv2 build) even though the shebang says
+  `env bash` and `just`/`fish` may hand it 5.x: under `set -u`, 3.2 aborts on
+  `"${empty_array[@]}"` with `<name>[@]: unbound variable` where bash 4.4+
+  expands it to nothing, so `locked=(); locked=(--locked)` made every macOS
+  `just bundle` die at the sidecar step (`line 39: locked[@]: unbound
+  variable`) — after a full release compile, so it was slow to hit and slow to
+  diagnose. Keep optional args in plain strings and word-split deliberately (see
+  `run_cargo`), never in possibly-empty arrays; same for any script a macOS
+  build hook runs. Nothing in CI catches this — there's no macOS job — so it
+  only shows up in the manual `.dmg` build. Don't use `resource_dir()`/
   `Contents/Resources` for this — sidecars live in `Contents/MacOS`.
 - **`just bundle` builds the CLI itself now.** The freedesktop packages used to
   need a separate `cargo build -p corral-cli` before `pnpm tauri build`
@@ -588,6 +603,23 @@ See `IDEAS.md` for the backlog. As of the latest work, implemented:
   Markdown previews.
 - **Git/PR integration**: fast-forward merge of a worktree's branch into its
   base, and push + open/update a GitHub PR via `gh`, with live CI checks.
+- **Linear tickets + attachments**: the header's ticket button (also in the
+  command palette) opens a picker on recently-updated tickets, searches Linear
+  with a personal API key from Settings, and attaches the chosen ticket's body
+  to the active session — written to a temp file via `save_text_attachment` and
+  referenced by path, the same pattern the PR/checks "Add to chat" actions use.
+  Dropping OS files on the terminal (or pasting a clipboard image) inserts
+  their quoted paths.
+  The API key is a credential and is handled differently from every other
+  setting: it is `#[serde(skip)]`, never crosses the IPC boundary, and the
+  `linear_*` commands read it backend-side. `corral-core::secret` stores it in
+  the OS credential store (Secret Service via zbus on Linux, Keychain on
+  macOS, Credential Manager on Windows) and falls back to a `0600` file in the
+  config dir when none is available — which is routine on Linux, so the
+  fallback is load-bearing, not an error path. `CORRAL_SECRET_FILE_ONLY=1`
+  forces the file backend (tests use it so they never touch a real keychain).
+  Support is deliberately Linux/macOS/Windows only; other Unix targets get the
+  file fallback.
 - **Per-project settings**, per-worktree free-text notes (sidebar subtitle,
   untracked), and desktop notifications (with cowboy flair 🤠). Provisioning
   files and the setup command are configured per project; the setup command

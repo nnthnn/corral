@@ -227,6 +227,38 @@ export interface Settings {
   /** Attach corral's embedded browser host to OpenCode v2 sessions, which is
    * what enables OpenCode's `browser.*` tools. On by default. */
   browser_enabled: boolean;
+  /** Always empty in the webview: the backend never sends the key itself
+   * (it lives in its own owner-only file and is read only by the Linear
+   * commands). Blank on save means "unchanged" — clearing is an explicit
+   * `linear_clear_api_key` call, so `SettingsForm` keeps the typed value
+   * locally until it's saved. */
+  linear_api_key: string;
+  /** Whether a Linear API key is stored — what the ticket picker gates on. */
+  linear_api_key_set: boolean;
+}
+
+/** One row in the Linear ticket picker. */
+export interface LinearIssueSummary {
+  id: string;
+  identifier: string;
+  title: string;
+  url: string;
+  state: string | null;
+  team: string | null;
+}
+
+/** A full Linear ticket, including the description attached to the agent. */
+export interface LinearIssue {
+  id: string;
+  identifier: string;
+  title: string;
+  description: string | null;
+  url: string;
+  state: string | null;
+  team: string | null;
+  assignee: string | null;
+  priority: string | null;
+  labels: string[];
 }
 
 export interface ProjectSettings {

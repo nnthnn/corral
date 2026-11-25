@@ -77,8 +77,16 @@ build-release: frontend
 # `build.beforeBundleCommand` (scripts/stage-cli-sidecar.sh) builds the CLI for
 # the target triple and stages it as a Tauri sidecar: Contents/MacOS/corral in
 # the .app and /usr/bin/corral in the .deb / .rpm / .AppImage.
+#
+# NO_STRIP: tauri's linuxdeploy ships binutils 2.35, which faults on the
+# `.relr.dyn` sections of modern (glibc >= 2.36) system libraries. It reports
+# that as a contentless "failed to run linuxdeploy", *after* the .deb / .rpm
+# have already been written, so only the AppImage goes missing. The trade-off
+# is an unstripped (~115 MB instead of ~35 MB) AppImage; the release workflow
+# builds on ubuntu-latest, whose older libraries linuxdeploy still strips.
+# Forwarded through the child process, so an explicit NO_STRIP=0 wins.
 bundle:
-    pnpm tauri build
+    NO_STRIP=1 pnpm tauri build
 
 # Universal (arm64 + x86_64) macOS .dmg, for the rare Intel Mac still running a
 # supported macOS. Not the release default — `bundle` produces a host-arch dmg

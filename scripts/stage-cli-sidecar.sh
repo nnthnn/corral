@@ -30,17 +30,32 @@ fi
 # GitHub Actions runs it (`CI` is set there), so a local `just bundle` still
 # works while a lockfile is being changed — CI is exactly where an out-of-date
 # lockfile should fail loudly instead.
-locked=()
+#
+# macOS's bash 3.2 aborts on `"${empty_array[@]}"` under `set -u` (`locked[@]:
+# unbound variable`) where bash 4.4+ expands it to nothing, so this script has
+# to keep running on both. Hence no array for the optional flag, and a `cargo`
+# wrapper instead of passing one long array (see `run_cargo` below).
+locked=""
 if [[ -n "${CI:-}" ]]; then
-  locked=(--locked)
+  locked="--locked"
 fi
 
+# `profile_dir` is where cargo puts the binary; `build_profile` is the flag that
+# selects it (`--debug` rather than no flag so the call sites stay uniform).
 profile_dir="release"
-cargo_args=(build -p corral-cli --release "${locked[@]}")
+build_profile="--release"
 if [[ "${TAURI_ENV_DEBUG:-}" == "true" ]]; then
   profile_dir="debug"
-  cargo_args=(build -p corral-cli "${locked[@]}")
+  build_profile="--debug"
 fi
+
+run_cargo() {
+  if [[ -n "$locked" ]]; then
+    cargo build -p corral-cli "$build_profile" "$locked" "$@"
+  else
+    cargo build -p corral-cli "$build_profile" "$@"
+  fi
+}
 
 target_dir="${CARGO_TARGET_DIR:-target}"
 mkdir -p src-tauri/binaries
@@ -51,14 +66,17 @@ if [[ "$triple" == universal-apple-darwin ]]; then
     echo "error: lipo is required for universal-apple-darwin (macOS only)" >&2
     exit 1
   fi
-  slices=()
+  # Deliberately not an array: `lipo` is fine with the plain positional args,
+  # and this keeps the script free of empty-array expansions (see above).
+  slice_args=""
   for arch in aarch64-apple-darwin x86_64-apple-darwin; do
-    cargo "${cargo_args[@]}" --target "$arch"
-    slices+=("$target_dir/$arch/$profile_dir/corral")
+    run_cargo --target "$arch"
+    slice_args="$slice_args $target_dir/$arch/$profile_dir/corral"
   done
-  lipo -create "${slices[@]}" -output "$destination"
+  # shellcheck disable=SC2086 # word-splitting the two slice paths is intended
+  lipo -create $slice_args -output "$destination"
 else
-  cargo "${cargo_args[@]}" --target "$triple"
+  run_cargo --target "$triple"
   built="$target_dir/$triple/$profile_dir/corral"
   if [[ ! -x "$built" ]]; then
     echo "error: cargo succeeded but $built is missing; check that" >&2

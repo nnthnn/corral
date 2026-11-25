@@ -8,9 +8,11 @@ import {
   type MonospaceFonts,
   monospaceFonts,
 } from "../lib/fonts";
+import { announceLinearKeySaved } from "../lib/linear";
 import { playSoundChoice, SOUND_OPTIONS } from "../lib/notifications";
 import { cancelScheduledSettingsSave, saveSettings } from "../lib/settings";
 import { invoke } from "../lib/tauri";
+import { showError, showSuccess } from "../lib/toasts";
 import { useStore } from "../store";
 import type { PlatformDefaults, Settings, SoundChoice } from "../types";
 import { Button } from "./Button";
@@ -61,6 +63,18 @@ export function SettingsForm() {
   const [piExecutablePath, setPiExecutablePath] = useState(
     initial.pi_executable_path,
   );
+  // The webview never receives the stored key (`Settings.linear_api_key` is
+  // always blank here), so this starts empty regardless; `hasStoredLinearKey`
+  // is the gating signal. A typed value only overwrites the stored key on
+  // Save — blanking the field means "keep it", and removal is its own button.
+  const [linearApiKey, setLinearApiKey] = useState("");
+  const [hasStoredLinearKey, setHasStoredLinearKey] = useState(
+    initial.linear_api_key_set ?? false,
+  );
+  // "Your system keychain" vs "owner-only file" — the backend picks at
+  // runtime, so the hint has to say which one is actually in play rather than
+  // claiming the stronger guarantee on every machine.
+  const [linearKeyStorage, setLinearKeyStorage] = useState<string | null>(null);
   const [extraInstructions, setExtraInstructions] = useState(
     initial.extra_instructions,
   );
@@ -99,6 +113,30 @@ export function SettingsForm() {
   const [diagState, setDiagState] = useState<"idle" | "copying" | "copied">(
     "idle",
   );
+
+  useEffect(() => {
+    invoke("linear_key_storage")
+      .then(setLinearKeyStorage)
+      .catch(() => setLinearKeyStorage(null));
+  }, []);
+
+  /** Delete the stored Linear API key. Separate from Save because a blank key
+   * field has to mean "unchanged" (the field is blank whenever a key is
+   * merely stored), so removal can't be inferred from the form. */
+  async function removeLinearKey() {
+    try {
+      await invoke("linear_clear_api_key");
+      setHasStoredLinearKey(false);
+      setLinearApiKey("");
+      useStore.setState((s) => ({
+        settings: { ...s.settings, linear_api_key_set: false },
+      }));
+      announceLinearKeySaved();
+      showSuccess("Linear API key removed.");
+    } catch (err) {
+      showError(`Couldn't remove the Linear API key: ${err}`);
+    }
+  }
 
   /** Gather the diagnostics blob (same snapshot as `corral doctor`, plus the
    * app's log tail) and put it on the clipboard, ready to paste into an
@@ -182,6 +220,7 @@ export function SettingsForm() {
     // hand-edited `settings.json` with "" gets repaired on the next Save
     // instead of persisting an empty command.
     const current = useStore.getState().settings;
+    const typedLinearKey = linearApiKey.trim();
     const editorFallback =
       platformDefaults?.editor_command || current.editor_command;
     const terminalFallback =
@@ -221,11 +260,22 @@ export function SettingsForm() {
       opencode_executable_path: opencodeExecutablePath.trim(),
       opencode2_executable_path: opencode2ExecutablePath.trim(),
       pi_executable_path: piExecutablePath.trim(),
+      // Blank means "unchanged": the field is always blank until the user
+      // types, since the webview never receives the stored key. Only a
+      // freshly typed value is sent; removal is `linear_clear_api_key`'s job.
+      linear_api_key: typedLinearKey,
+      linear_api_key_set: hasStoredLinearKey || typedLinearKey !== "",
     };
     try {
+      if (typedLinearKey) setHasStoredLinearKey(true);
       useStore.setState({ settings: updated });
       await saveSettings();
       cancelScheduledSettingsSave();
+      // A replaced key invalidates any ticket list already on screen.
+      if (typedLinearKey) announceLinearKeySaved();
+      // The typed key is now in the backend's own file; don't keep it in
+      // component state (or in the store) any longer than necessary.
+      setLinearApiKey("");
       setError(null);
       setSaveState("saved");
       setTimeout(() => setSaveState("idle"), 1500);
@@ -544,6 +594,36 @@ export function SettingsForm() {
                 Default "Also delete branch" to checked when removing a worktree
               </span>
             </label>
+            <label>
+              Linear API key
+              <input
+                type="password"
+                placeholder={
+                  hasStoredLinearKey ? "Saved — type to replace" : "lin_api_…"
+                }
+                autoComplete="off"
+                value={linearApiKey}
+                onChange={(e) => setLinearApiKey(e.target.value)}
+              />
+            </label>
+            {hasStoredLinearKey && (
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  void removeLinearKey();
+                }}
+              >
+                Remove key
+              </Button>
+            )}
+            <p className="hint">
+              Enables the header's ticket button and the command palette's
+              "Attach Linear ticket". Create a personal key under Linear →
+              Settings → Security &amp; access → Personal API keys.{" "}
+              {linearKeyStorage
+                ? `This key is ${linearKeyStorage}.`
+                : "Stored in your system keychain when one is available."}
+            </p>
           </div>
           <div className={styles.column}>
             <h3 className={styles.columnHeading}>Notifications &amp; Power</h3>

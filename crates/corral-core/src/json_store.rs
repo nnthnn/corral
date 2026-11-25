@@ -59,11 +59,18 @@ fn backup_path(path: &Path) -> std::path::PathBuf {
 /// Snapshot `path` to `<name>.bak` (if the file exists), copying rather than
 /// moving so the original stays put for anything that may still read it.
 /// Best-effort: a failed copy only logs, tagged with `why` to make the
-/// failure readable.
+/// failure readable. The backup is written owner-only, like the store itself.
 pub(crate) fn backup_file(path: &Path, context: &str, why: &str) {
     let backup = backup_path(path);
-    if let Err(e) = fs::copy(path, &backup) {
-        tracing::warn!("{context}: failed to back up {path:?} ({why}) to {backup:?}: {e}");
+    match fs::read(path) {
+        Ok(bytes) => {
+            if let Err(e) = write_private(&backup, &bytes) {
+                tracing::warn!("{context}: failed to back up {path:?} ({why}) to {backup:?}: {e}");
+            }
+        }
+        Err(e) => {
+            tracing::warn!("{context}: failed to back up {path:?} ({why}) to {backup:?}: {e}");
+        }
     }
 }
 
@@ -82,6 +89,12 @@ pub(crate) fn backup_existing(path: &Path, context: &str) {
 /// Serialize `value` as pretty JSON and write it to `path`, creating the
 /// parent directory if needed. Writes via a same-directory temp file plus a
 /// rename, so a concurrent reader never observes a partially-written file.
+///
+/// The file is created owner-only (`0600`): `settings.json` holds
+/// credentials (the Linear API key), and every other store here is private
+/// app state nobody else on the machine needs to read. `rename` carries the
+/// temp file's mode over, so the destination never exists at the umask
+/// default even for an instant.
 pub fn save_pretty<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(dir)?;
@@ -91,8 +104,24 @@ pub fn save_pretty<T: Serialize>(path: &Path, value: &T) -> Result<()> {
         std::process::id(),
         TMP_COUNTER.fetch_add(1, Ordering::Relaxed),
     ));
-    fs::write(&tmp_path, serde_json::to_vec_pretty(value)?)?;
+    let bytes = serde_json::to_vec_pretty(value)?;
+    write_private(&tmp_path, &bytes)?;
     fs::rename(&tmp_path, path)?;
+    Ok(())
+}
+
+/// Write `bytes` to `path` with owner-only permissions (`0600` on Unix).
+/// Used for stores that may contain credentials, and for their backups.
+pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    use std::io::Write;
+    options.open(path)?.write_all(bytes)?;
     Ok(())
 }
 
