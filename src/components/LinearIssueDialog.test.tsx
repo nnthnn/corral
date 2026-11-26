@@ -14,6 +14,7 @@ const summary: LinearIssueSummary = {
   url: "https://linear.app/acme/issue/ENG-123",
   state: "In Progress",
   team: "Engineering",
+  project: "Q3 Auth",
 };
 
 const recentSummary: LinearIssueSummary = {
@@ -23,6 +24,7 @@ const recentSummary: LinearIssueSummary = {
   url: "https://linear.app/acme/issue/ENG-119",
   state: "Todo",
   team: "Engineering",
+  project: null,
 };
 
 const issue: LinearIssue = {
@@ -83,6 +85,18 @@ describe("LinearIssueDialog", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Recent tickets")).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("linear_recent", { limit: 10 });
+  });
+
+  it("shows a project badge only when the ticket belongs to a project", async () => {
+    mockLinear({ recent: [summary, recentSummary] });
+    openWithKey();
+    render(<LinearIssueDialog />);
+
+    await screen.findByText("Fix login timeout");
+    expect(screen.getByText("Q3 Auth")).toBeInTheDocument();
+    // `recentSummary.project` is null: the row renders without a chip, and no
+    // empty element is left behind to shift the row.
+    expect(screen.getAllByText(/Q3 Auth/)).toHaveLength(1);
   });
 
   it("replaces the recent list with search results once you type", async () => {

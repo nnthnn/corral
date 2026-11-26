@@ -245,6 +245,8 @@ export interface LinearIssueSummary {
   url: string;
   state: string | null;
   team: string | null;
+  /** Project name; null for issues that aren't in a project. */
+  project: string | null;
 }
 
 /** A full Linear ticket, including the description attached to the agent. */
@@ -256,6 +258,7 @@ export interface LinearIssue {
   url: string;
   state: string | null;
   team: string | null;
+  project: string | null;
   assignee: string | null;
   priority: string | null;
   labels: string[];

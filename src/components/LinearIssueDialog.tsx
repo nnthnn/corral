@@ -194,6 +194,15 @@ export function LinearIssueDialog() {
   const results = isSearchMode ? searchResults : recent;
   const loading = isSearchMode ? searching : recentLoading;
   const error = isSearchMode ? searchError : recentError;
+  // Linear identifiers vary in width (`DEV-9`, `DEV-10`, `ENG-1234`), and
+  // letting each row size its own leaves every title starting at a different
+  // x. One shared width — the longest identifier on screen, in monospace
+  // `ch` units — keeps the title column straight without truncating the wide
+  // ones. The floor keeps a single short result from collapsing the column.
+  const identifierChars = Math.max(
+    6,
+    ...results.map((issue) => issue.identifier.length),
+  );
 
   async function select(summary: LinearIssueSummary): Promise<void> {
     if (attaching) return;
@@ -293,10 +302,10 @@ export function LinearIssueDialog() {
           </div>
           <ul ref={listRef} className="min-h-0 flex-1 overflow-y-auto p-1.5">
             {error && (
-              <li className="px-2 py-2 text-sub text-danger">{error}</li>
+              <li className="px-1.5 py-2 text-sub text-danger">{error}</li>
             )}
             {!error && results.length === 0 && (
-              <li className="px-2 py-2 text-sub text-muted">
+              <li className="px-1.5 py-2 text-sub text-muted">
                 {isSearchMode
                   ? searching
                     ? "Searching…"
@@ -307,7 +316,7 @@ export function LinearIssueDialog() {
               </li>
             )}
             {!error && !isSearchMode && results.length > 0 && (
-              <li className="px-2 py-1 text-label text-muted">
+              <li className="px-1.5 py-1 text-label text-muted">
                 Recent tickets
               </li>
             )}
@@ -321,18 +330,33 @@ export function LinearIssueDialog() {
                     disabled={attaching !== null}
                     data-active={isActive ? true : undefined}
                     className={clsx(
-                      "flex w-full cursor-pointer items-baseline gap-2 rounded-sm px-2 py-2 text-left disabled:cursor-default",
+                      "flex w-full cursor-pointer items-center gap-2 rounded-sm px-1.5 py-2 text-left disabled:cursor-default",
                       isActive ? "bg-surface-2" : "bg-transparent",
                     )}
                     onMouseEnter={() => setActiveIndex(i)}
                     onClick={() => void select(issue)}
                   >
-                    <span className="shrink-0 font-mono text-label text-muted">
+                    <span
+                      className="shrink-0 font-mono text-label text-muted"
+                      style={{ width: `${identifierChars}ch` }}
+                    >
                       {issue.identifier}
                     </span>
                     <span className="min-w-0 flex-1 truncate text-body">
                       {issue.title}
                     </span>
+                    {issue.project && (
+                      // Secondary context, so it stays quiet: a bordered chip
+                      // reads on both the plain and the active (surface-2) row,
+                      // and `leading-none` keeps a chip-only row from growing
+                      // taller than the ones without one.
+                      <span
+                        className="max-w-[9rem] shrink-0 truncate rounded-sm border border-border px-1.5 py-1 text-label leading-none text-muted"
+                        title={issue.project}
+                      >
+                        {issue.project}
+                      </span>
+                    )}
                     {isAttaching ? (
                       <Loader2
                         size={14}

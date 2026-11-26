@@ -27,6 +27,9 @@ pub struct LinearIssueSummary {
     pub state: Option<String>,
     /// Team name, when Linear returned one.
     pub team: Option<String>,
+    /// Project name, when the issue belongs to one (`None` for issues that
+    /// aren't in a project — Linear makes the field optional).
+    pub project: Option<String>,
 }
 
 /// A full ticket, including its description, ready to be formatted into an
@@ -41,6 +44,7 @@ pub struct LinearIssue {
     pub url: String,
     pub state: Option<String>,
     pub team: Option<String>,
+    pub project: Option<String>,
     pub assignee: Option<String>,
     pub priority: Option<String>,
     pub labels: Vec<String>,
@@ -55,6 +59,7 @@ impl LinearIssue {
             url: self.url.clone(),
             state: self.state.clone(),
             team: self.team.clone(),
+            project: self.project.clone(),
         }
     }
 }
@@ -69,6 +74,7 @@ query CorralSearchIssues($term: String!, $first: Int!) {
       url
       state { name }
       team { name }
+      project { name }
     }
   }
 }
@@ -88,6 +94,7 @@ query CorralRecentIssues($first: Int!) {
       url
       state { name }
       team { name }
+      project { name }
     }
   }
 }
@@ -103,6 +110,7 @@ query CorralIssue($id: String!) {
     url
     state { name }
     team { name }
+    project { name }
     assignee { name }
     priorityLabel
     labels { nodes { name } }
@@ -158,6 +166,7 @@ fn parse_summary(node: &Value) -> Option<LinearIssueSummary> {
         url: str_at(node, "/url").unwrap_or_default(),
         state: str_at(node, "/state/name"),
         team: str_at(node, "/team/name"),
+        project: str_at(node, "/project/name"),
     })
 }
 
@@ -179,6 +188,7 @@ fn parse_issue(node: &Value) -> Option<LinearIssue> {
         url: str_at(node, "/url").unwrap_or_default(),
         state: str_at(node, "/state/name"),
         team: str_at(node, "/team/name"),
+        project: str_at(node, "/project/name"),
         assignee: str_at(node, "/assignee/name"),
         priority: str_at(node, "/priorityLabel"),
         labels: node
@@ -323,7 +333,8 @@ mod tests {
                 "title": "Fix login timeout",
                 "url": "https://linear.app/acme/issue/ENG-123",
                 "state": { "name": "In Progress" },
-                "team": { "name": "Engineering" }
+                "team": { "name": "Engineering" },
+                "project": { "name": "Q3 Auth" }
             }"#,
         )
         .unwrap();
@@ -331,6 +342,7 @@ mod tests {
         assert_eq!(summary.identifier, "ENG-123");
         assert_eq!(summary.state.as_deref(), Some("In Progress"));
         assert_eq!(summary.team.as_deref(), Some("Engineering"));
+        assert_eq!(summary.project.as_deref(), Some("Q3 Auth"));
     }
 
     #[test]
@@ -347,6 +359,9 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].identifier, "ENG-1");
         assert_eq!(rows[1].identifier, "ENG-3");
+        // No `project` in the payload (or a null one) is the normal case:
+        // most issues aren't in a project, and it must not fail the parse.
+        assert_eq!(rows[0].project, None);
     }
 
     #[test]
@@ -360,6 +375,7 @@ mod tests {
                 "url": "https://linear.app/acme/issue/ENG-123",
                 "state": { "name": "Todo" },
                 "team": { "name": "Engineering" },
+                "project": { "name": "Q3 Auth" },
                 "assignee": { "name": "Ada" },
                 "priorityLabel": "High",
                 "labels": { "nodes": [{ "name": "bug" }, { "name": "auth" }] }
@@ -370,6 +386,7 @@ mod tests {
         assert_eq!(issue.assignee.as_deref(), Some("Ada"));
         assert_eq!(issue.priority.as_deref(), Some("High"));
         assert_eq!(issue.labels, vec!["bug", "auth"]);
+        assert_eq!(issue.project.as_deref(), Some("Q3 Auth"));
         assert!(issue.description.unwrap().contains("Repro steps"));
     }
 

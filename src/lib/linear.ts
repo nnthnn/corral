@@ -22,6 +22,7 @@ export function formatIssueAttachment(issue: LinearIssue): string {
   if (issue.url) meta.push(`- **URL:** ${issue.url}`);
   if (issue.state) meta.push(`- **State:** ${issue.state}`);
   if (issue.team) meta.push(`- **Team:** ${issue.team}`);
+  if (issue.project) meta.push(`- **Project:** ${issue.project}`);
   if (issue.assignee) meta.push(`- **Assignee:** ${issue.assignee}`);
   if (issue.priority) meta.push(`- **Priority:** ${issue.priority}`);
   if (issue.labels.length)

@@ -20,6 +20,7 @@ const issue: LinearIssue = {
   url: "https://linear.app/acme/issue/ENG-123",
   state: "In Progress",
   team: "Engineering",
+  project: "Q3 Auth",
   assignee: "Ada",
   priority: "High",
   labels: ["bug", "auth"],
@@ -38,6 +39,7 @@ describe("formatIssueAttachment", () => {
     expect(text).toContain("# ENG-123: Fix login timeout");
     expect(text).toContain("- **URL:** https://linear.app/acme/issue/ENG-123");
     expect(text).toContain("- **State:** In Progress");
+    expect(text).toContain("- **Project:** Q3 Auth");
     expect(text).toContain("- **Labels:** bug, auth");
     expect(text).toContain("## Description");
     expect(text).toContain("Sessions expire too early.");
@@ -49,12 +51,14 @@ describe("formatIssueAttachment", () => {
       description: null,
       state: null,
       team: null,
+      project: null,
       assignee: null,
       priority: null,
       labels: [],
     });
     expect(text).toContain("(no description)");
     expect(text).not.toContain("**State:**");
+    expect(text).not.toContain("**Project:**");
     expect(text).not.toContain("**Assignee:**");
   });
 });
