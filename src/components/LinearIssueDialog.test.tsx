@@ -103,22 +103,48 @@ describe("LinearIssueDialog", () => {
     expect(screen.getAllByText(/Q3 Auth/)).toHaveLength(1);
   });
 
-  it("tints the project chip and status dot with Linear's colors", async () => {
+  it("fills the project badge with its own color, and keeps the status dot", async () => {
     mockLinear({ recent: [summary] });
     openWithKey();
     render(<LinearIssueDialog />);
 
-    const chip = (await screen.findByText("Q3 Auth")).closest(
+    const badge = (await screen.findByText("Q3 Auth")).closest(
       "[title]",
     ) as HTMLElement;
-    // Tinted from the project's own color rather than the neutral border.
-    expect(chip.getAttribute("style")).toContain("background-color");
-    const dot = chip.querySelector("[style*='background-color']");
-    expect(dot).not.toBeNull();
+    // Solid fill, not a tint: the background *is* the project's color.
+    expect(badge.getAttribute("style")).toMatch(/5e6ad2|94, 106, 210/i);
+    expect(badge.querySelector("[style*='background-color']")).toBeNull();
     const stateDot = screen
       .getByText("In Progress")
       .querySelector("[style*='background-color']");
     expect(stateDot).not.toBeNull();
+  });
+
+  it("picks ink that stays readable on light and dark project colors", async () => {
+    mockLinear({
+      recent: [
+        { ...summary, project: "Amber", project_color: "#f2c94c" },
+        {
+          ...summary,
+          id: "uuid-3",
+          identifier: "ENG-7",
+          title: "Other ticket",
+          project: "Indigo",
+          project_color: "#5e6ad2",
+        },
+      ],
+    });
+    openWithKey();
+    render(<LinearIssueDialog />);
+
+    const amber = (await screen.findByText("Amber")).closest(
+      "[title]",
+    ) as HTMLElement;
+    const indigo = screen.getByText("Indigo").closest("[title]") as HTMLElement;
+    expect(amber.style.color).not.toBe(indigo.style.color);
+    // Dark ink on the light color, light ink on the dark one.
+    expect(amber.getAttribute("style")).toMatch(/121212|18, 18, 18/i);
+    expect(indigo.getAttribute("style")).toMatch(/ffffff|255, 255, 255/i);
   });
 
   it("falls back to the neutral chip when a color isn't hex", async () => {
@@ -138,7 +164,6 @@ describe("LinearIssueDialog", () => {
       "[title]",
     ) as HTMLElement;
     expect(chip.getAttribute("style")).toBeNull();
-    expect(chip.querySelector("[style*='background-color']")).toBeNull();
     expect(
       screen
         .getByText("In Progress")

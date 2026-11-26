@@ -26,6 +26,29 @@ function hexColor(color: string | null): string | null {
   return color && /^#[0-9a-f]{6}$/i.test(color) ? color : null;
 }
 
+/** Relative luminance, for picking text that stays readable on a solid badge.
+ * (WCAG 2.x definition.) */
+function luminance(hex: string): number {
+  const channel = (i: number) => {
+    const c = Number.parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
+}
+
+/** Foreground for a solid badge in `hex`: whichever of near-white and
+ * near-black contrasts more. Fixed ink beats `color-mix` here because the
+ * project palette runs from `#5E6AD2` to `#F2C94C`, and a mid-tone like the
+ * teal would fail against both if it had to share one foreground. */
+function readableOn(hex: string): string {
+  const bg = luminance(hex);
+  const contrastWith = (other: number) =>
+    (Math.max(bg, other) + 0.05) / (Math.min(bg, other) + 0.05);
+  const white = contrastWith(1);
+  const ink = contrastWith(luminance("#121212"));
+  return white >= ink ? "#ffffff" : "#121212";
+}
+
 function openSettings(): void {
   useStore.setState({ linearDialogOpen: false, settingsOpen: true });
 }
@@ -355,33 +378,28 @@ export function LinearIssueDialog() {
                       {issue.title}
                     </span>
                     {issue.project && (
-                      // Secondary context, so it stays quiet: a bordered chip
-                      // reads on both the plain and the active (surface-2) row,
-                      // and `leading-none` keeps a chip-only row from growing
-                      // taller than the ones without one. Linear's own project
-                      // color tints the chip but never the label text — the
-                      // palette has colors too dark to read as small type.
+                      // Solid badge: the project's own color as the fill, with
+                      // a near-black or near-white ink chosen per color so a
+                      // light project (amber) and a dark one (indigo) both
+                      // stay legible. `border` stays on both variants so a
+                      // project-less row and one with a badge keep the same
+                      // box height.
                       <span
                         className={clsx(
-                          "flex max-w-[9rem] shrink-0 items-center gap-1.5 rounded-sm border px-1.5 py-1 text-label leading-none",
+                          "flex max-w-[9rem] min-w-0 shrink-0 items-center rounded-sm border px-1.5 py-1 text-label font-medium leading-none",
                           !projectColor && "border-border text-muted",
                         )}
                         style={
                           projectColor
                             ? {
-                                borderColor: `${projectColor}59`,
-                                backgroundColor: `${projectColor}1f`,
+                                backgroundColor: projectColor,
+                                borderColor: projectColor,
+                                color: readableOn(projectColor),
                               }
                             : undefined
                         }
                         title={issue.project}
                       >
-                        {projectColor && (
-                          <span
-                            className="size-1.5 shrink-0 rounded-full"
-                            style={{ backgroundColor: projectColor }}
-                          />
-                        )}
                         <span className="truncate">{issue.project}</span>
                       </span>
                     )}
