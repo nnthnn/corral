@@ -22,6 +22,49 @@ beforeEach(() => {
 });
 
 describe("WorktreeRow", () => {
+  it("does not show the base-conflict indicator once the PR is merged", () => {
+    const status: GitStatus = {
+      branch: "feat/churning",
+      ahead: 0,
+      behind: 0,
+      staged: 0,
+      modified: 0,
+      untracked: 0,
+      added: 0,
+      removed: 0,
+      conflicts: 0,
+      commits_ahead_of_base: 3,
+      merged_into_base: false,
+      conflicts_with_base: true,
+      has_remote: true,
+      last_commit_message: "",
+      last_commit_time: 0,
+      base_added: 0,
+      base_removed: 0,
+    };
+    const merged: Worktree = {
+      ...wt(status),
+      pr_state: {
+        number: 102,
+        url: "https://example.com/pr/102",
+        state: "merged",
+        is_draft: false,
+      },
+    };
+    render(
+      <WorktreeRow
+        wt={merged}
+        filterText=""
+        active={false}
+        onSelect={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByTitle("Would conflict with the base branch"),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows the Merged feature-status icon instead of an agent-activity dot", () => {
     const status: GitStatus = {
       branch: "feat/churning",

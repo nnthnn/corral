@@ -73,6 +73,25 @@ describe("WorktreeHoverCard", () => {
     expect(screen.getByText("my-feature")).toBeInTheDocument();
   });
 
+  it("hides the base-conflict warning once the worktree is merged", () => {
+    const props = {
+      wt: wt({ status: status({ conflicts_with_base: true }) }),
+      anchorRect,
+      onMouseEnter: vi.fn(),
+      onMouseLeave: vi.fn(),
+    };
+    const warning = /Would conflict with the base branch/;
+    const { rerender } = render(
+      <WorktreeHoverCard {...props} status="committed" />,
+    );
+    expect(screen.getByText(warning)).toBeInTheDocument();
+
+    // A merged branch can still "conflict" with the base it was squash-merged
+    // into; by then the only action left is Remove, so the advice is noise.
+    rerender(<WorktreeHoverCard {...props} status="merged" />);
+    expect(screen.queryByText(warning)).not.toBeInTheDocument();
+  });
+
   it("shows branch-vs-base diff totals in the header", () => {
     render(
       <WorktreeHoverCard

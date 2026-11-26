@@ -8,7 +8,7 @@ import {
 } from "../lib/worktrees";
 import { useStore } from "../store";
 import type { CheckRun, PrInfo, Worktree } from "../types";
-import { isFullyMerged, wtId } from "../utils";
+import { isFullyMerged, isMergeComplete, wtId } from "../utils";
 import { Button } from "./Button";
 
 export type MergeButtonState =
@@ -56,7 +56,9 @@ function mergeButtonState(
   const dirty = st.staged + st.modified + st.untracked;
 
   if (st.has_remote) {
-    if (prInfo?.state === "merged") return { kind: "remove" };
+    // Shared with `RebaseButton`: a merged PR means "Remove", even while the
+    // local branch still looks ahead/conflicted after a squash merge.
+    if (isMergeComplete(st, prInfo, justMerged)) return { kind: "remove" };
     const prOpen = prInfo?.state === "open";
     if (!prOpen && st.commits_ahead_of_base === 0 && dirty === 0)
       return noteOrHidden(st);

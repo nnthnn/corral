@@ -84,7 +84,11 @@ export function WorktreeHoverCard({
         )}
         <FeatureStatusIcon status={status} />
       </div>
-      {s?.conflicts_with_base && (
+      {s?.conflicts_with_base && status !== "merged" && (
+        // Suppressed once merged: a squash merge rewrites the commit, so the
+        // branch keeps "conflicting" with the base it already landed in. The
+        // card only ever offers Remove at that point, and the rebase advice is
+        // unactionable noise.
         <div className="flex items-center gap-1.5 text-sub text-danger">
           <AlertTriangle size={13} className="flex-none" />
           <span>Would conflict with the base branch — rebase to resolve</span>

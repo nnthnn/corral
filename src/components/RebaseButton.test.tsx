@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as worktrees from "../lib/worktrees";
 import { useStore } from "../store";
-import type { GitStatus, Worktree } from "../types";
+import type { GitStatus, PrInfo, Worktree } from "../types";
 import { RebaseButton, rebaseButtonState } from "./RebaseButton";
 
 vi.mock("../lib/worktrees", async () => {
@@ -74,6 +74,12 @@ describe("rebaseButtonState", () => {
       kind: "rebase",
     });
   });
+
+  it("is hidden once the branch is merged, even while it still conflicts", () => {
+    expect(
+      rebaseButtonState(wtWith({ conflicts_with_base: true }), true),
+    ).toEqual({ kind: "hidden" });
+  });
 });
 
 describe("RebaseButton", () => {
@@ -117,5 +123,54 @@ describe("RebaseButton", () => {
       />,
     );
     expect(screen.getByText("Rebase")).toBeDisabled();
+  });
+
+  it("hides the button when a squash-merged PR is known, even though the branch still conflicts", () => {
+    const prInfo: PrInfo = {
+      number: 12,
+      url: "https://github.com/o/r/pull/12",
+      state: "merged",
+      is_draft: false,
+    };
+    useStore.setState({ prInfoByWtId: new Map([["p/f", prInfo]]) });
+    render(
+      <RebaseButton
+        wt={wtWith({
+          conflicts_with_base: true,
+          commits_ahead_of_base: 3,
+          has_remote: true,
+        })}
+        mode="chat"
+        base="main"
+      />,
+    );
+    expect(screen.queryByText("Rebase")).not.toBeInTheDocument();
+  });
+
+  it("still offers a rebase while the PR is open", () => {
+    const prInfo: PrInfo = {
+      number: 12,
+      url: "https://github.com/o/r/pull/12",
+      state: "open",
+      is_draft: false,
+    };
+    useStore.setState({ prInfoByWtId: new Map([["p/f", prInfo]]) });
+    render(
+      <RebaseButton
+        wt={wtWith({ conflicts_with_base: true, has_remote: true })}
+        mode="chat"
+        base="main"
+      />,
+    );
+    expect(screen.getByText("Rebase")).toBeInTheDocument();
+  });
+
+  it("hides the button when local ancestry says the branch is merged", () => {
+    render(
+      <RebaseButton
+        wt={wtWith({ conflicts_with_base: true, merged_into_base: true })}
+      />,
+    );
+    expect(screen.queryByText("Rebase")).not.toBeInTheDocument();
   });
 });

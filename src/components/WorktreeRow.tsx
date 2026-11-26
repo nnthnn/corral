@@ -62,7 +62,13 @@ export function WorktreeRow({
     : (wt.pr_checks ?? null);
   const unread = useStore((s) => s.unreadOutput.has(id) && id !== s.selectedId);
   const removing = useStore((s) => s.removingIds.has(id));
-  const indicator = rightSlotIndicator(wt.status, attention, running, checks);
+  const indicator = rightSlotIndicator(
+    wt.status,
+    attention,
+    running,
+    checks,
+    status === "merged",
+  );
   const rowRef = useRef<HTMLDivElement>(null);
   const anchorRectRef = useRef<DOMRect | null>(null);
   const hover = useHoverIntent();

@@ -116,6 +116,27 @@ export function isFullyMerged(
   return deriveLifecycleState(status, prInfo, justMerged) === "merged";
 }
 
+/** "Merged" as the merge/rebase action buttons mean it, shared by
+ * `MergeButton` and `RebaseButton` so the two halves of the same header can't
+ * disagree.
+ *
+ * GitHub's PR state is authoritative whenever there's a remote: a squash
+ * merge rewrites the commit, so the local branch is *not* an ancestor of base
+ * and `merged_into_base`/`conflicts_with_base` keep describing a divergence
+ * that's already been resolved upstream. Without a remote, fall back to
+ * `isFullyMerged`'s local rules (which also let a dirty tree veto "merged" —
+ * work landed after the merge is still work). */
+export function isMergeComplete(
+  status: GitStatus | null,
+  prInfo: PrInfo | null,
+  justMerged: boolean,
+): boolean {
+  if (!status) return false;
+  return status.has_remote
+    ? prInfo?.state === "merged"
+    : isFullyMerged(status, prInfo, justMerged);
+}
+
 /** Entity-encodes `& < > " '` — a small self-contained escape so this module
  * stays DOM-free (unlike `ui/templates.ts`'s `html` tag, it can run under
  * plain Node in tests, no jsdom required). */
@@ -337,13 +358,21 @@ export function rightSlotIndicator(
   attention: boolean,
   running = false,
   checks?: ChecksSummary | null,
+  merged = false,
 ): RightSlotIndicator {
   if (running) return { kind: "running" };
   if (attention) return { kind: "attention" };
-  if (checks && checks.failed > 0) return { kind: "checks-failed" };
+  // Once a branch is merged the worktree is just waiting to be removed, so its
+  // CI results and base-divergence advice are both stale — a squash merge
+  // leaves the branch "conflicting" with the base it already landed in. Keep
+  // the session signals above (an agent can still be running) but don't light
+  // the row up with either.
+  if (!merged && checks && checks.failed > 0) return { kind: "checks-failed" };
   if (!status) return { kind: "none" };
-  if (status.conflicts_with_base) return { kind: "conflict" };
-  if (checks && checks.pending > 0) return { kind: "checks-running" };
+  if (!merged) {
+    if (status.conflicts_with_base) return { kind: "conflict" };
+    if (checks && checks.pending > 0) return { kind: "checks-running" };
+  }
   const dirty = status.staged + status.modified + status.untracked;
   if (dirty > 0 && (status.added > 0 || status.removed > 0)) {
     return { kind: "diff", added: status.added, removed: status.removed };

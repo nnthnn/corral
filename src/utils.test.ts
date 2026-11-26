@@ -669,6 +669,30 @@ describe("rightSlotIndicator", () => {
     });
   });
 
+  it("hides conflict and CI signals for a merged worktree", () => {
+    const status = gitStatus({
+      conflicts_with_base: true,
+      ahead: 1,
+      base_added: 3,
+      base_removed: 1,
+    });
+    const checks = { total: 3, pending: 1, failed: 1 };
+    // A squash merge leaves the branch looking conflicted with (and CI-stale
+    // against) a base it already landed in — the row should read as done.
+    expect(rightSlotIndicator(status, false, false, checks, true)).toEqual({
+      kind: "diff",
+      added: 3,
+      removed: 1,
+    });
+    // Session signals still win over the merged suppression.
+    expect(rightSlotIndicator(status, true, false, checks, true)).toEqual({
+      kind: "attention",
+    });
+    expect(rightSlotIndicator(status, false, true, checks, true)).toEqual({
+      kind: "running",
+    });
+  });
+
   it("still reports attention/running above conflict", () => {
     const status = gitStatus({ conflicts_with_base: true });
     expect(rightSlotIndicator(status, true, false)).toEqual({
