@@ -67,8 +67,20 @@ fn project_create_error(e: corral_core::Error) -> String {
 /// whose scaffolding hasn't happened yet. A non-empty non-repo directory is
 /// rejected. Errors if a project with that name is already registered.
 /// Returns the derived name.
+///
+/// `async` + `spawn_blocking` for the same reason as `create_project`: the
+/// empty-folder case runs `git init` + commit and registering reloads settings
+/// (a keyring read), none of which belongs on the GTK main thread.
 #[tauri::command]
-pub fn add_project(path: String) -> Result<String, String> {
+pub async fn add_project(path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || add_project_blocking(path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// The blocking half of [`add_project`], kept separate so the command can hand
+/// it the whole body unchanged.
+fn add_project_blocking(path: String) -> Result<String, String> {
     let canonical = std::fs::canonicalize(&path).map_err(|e| format!("{path}: {e}"))?;
     match corral_core::project_create::register_existing(&canonical) {
         Ok(name) => Ok(name),
@@ -86,19 +98,33 @@ pub fn add_project(path: String) -> Result<String, String> {
 /// (dropping its saved settings too). Nothing on disk is touched — the repo
 /// and its worktree directories stay exactly where they are; the project
 /// reappears if re-added later via `add_project`.
+///
+/// `async` + `spawn_blocking` around the two heavy halves, for the reason
+/// `merge_worktree` documents: `worktree::list()` runs a full `git status`
+/// scan for every worktree of every project (the same call `list_worktrees`
+/// was moved off the main thread for), and `unregister` rewrites the registry
+/// and reloads settings, which reads the OS keyring. The teardown between them
+/// only takes locks and signals children, so it stays here rather than taking
+/// the `State` borrows across a `spawn_blocking` boundary they can't cross.
 #[tauri::command]
-pub fn remove_project(
+pub async fn remove_project(
     app: tauri::AppHandle,
-    session_registry: tauri::State<crate::commands::session::SessionRegistry>,
-    provision_registry: tauri::State<crate::commands::provision::Registry>,
-    run_registry: tauri::State<crate::commands::run::Registry>,
+    session_registry: tauri::State<'_, crate::commands::session::SessionRegistry>,
+    provision_registry: tauri::State<'_, crate::commands::provision::Registry>,
+    run_registry: tauri::State<'_, crate::commands::run::Registry>,
     project: String,
 ) -> Result<(), String> {
-    let worktrees: Vec<_> = worktree::list()
-        .str_err()?
-        .into_iter()
-        .filter(|w| w.project == project)
-        .collect();
+    let filter = project.clone();
+    let worktrees: Vec<_> = tauri::async_runtime::spawn_blocking(move || {
+        worktree::list().map(|all| {
+            all.into_iter()
+                .filter(|w| w.project == filter)
+                .collect::<Vec<_>>()
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .str_err()?;
     for wt in &worktrees {
         let key = corral_core::agent_session::key(&wt.project, &wt.feature);
         crate::commands::session::kill_session_best_effort(&app, &session_registry, &key);
@@ -111,5 +137,10 @@ pub fn remove_project(
             tracing::warn!("remove_project: failed to clear worktree note for {key}: {e}");
         }
     }
-    corral_core::project_settings::unregister(&project).str_err()
+    tauri::async_runtime::spawn_blocking(move || {
+        corral_core::project_settings::unregister(&project)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .str_err()
 }

@@ -278,6 +278,18 @@ on a Mac — keep that in mind when touching `process.rs`, `caffeinate.rs`, or
   `run_invoke_handler`), so disk/git/keychain work freezes the whole UI.
   `create_project` was one of these: `git init` + commit + a settings reload
   (which reads the keychain) ran inline, which is what exposed the panic above.
+  The sweep since then covers the other settings/credential commands
+  (`get_settings`, `save_settings`, `linear_key_storage`), project lifecycle
+  (`add_project`, and `remove_project` — whose `worktree::list()` is the same
+  full `git status` scan `list_worktrees` was converted for), and
+  `rename_worktree`. Synchronous **by design**: the per-keystroke session hot
+  path (`write_session`/`resize_session`/`attach_session`, where a thread hop
+  costs more than the work), and the `browser_*` window commands (window ops
+  must be on the main thread). Synchronous **and still wrong** — next
+  candidates, all of which do real I/O inline: `branch_changes`, `file_diff`,
+  `revert_file`, `list_worktree_dir`, `read_worktree_file`, `send_notification`
+  (blocking DBus), `memory_usage` (polled `/proc` walk), `save_pasted_image`,
+  `save_text_attachment`, `resolve_run_command`, `list_run_targets`.
 - **Rust changes need a full app restart.** Vite HMR only reloads the
   frontend; new/changed Tauri commands or Rust logic won't take effect until
   the binary rebuilds (e.g. `just run`). Frontend-only changes hot-reload
