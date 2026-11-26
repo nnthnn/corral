@@ -150,12 +150,19 @@ pub struct Settings {
     /// issue titles/bodies. Empty means "Linear integration not set up".
     ///
     /// Unlike every other field this is a credential, so it is *never*
-    /// serialized: `#[serde(skip)]` keeps it out of `settings.json` (and its
-    /// `.bak` snapshots) entirely, and out of any `Settings` handed across the
-    /// IPC boundary to the webview. It lives in its own owner-only file next
-    /// to `settings.json` — see [`load_linear_api_key`] /
-    /// [`set_linear_api_key`] — which is the only way in or out.
-    #[serde(skip)]
+    /// serialized: `#[serde(skip_serializing)]` keeps it out of `settings.json`
+    /// (and its `.bak` snapshots) entirely, and out of any `Settings` handed
+    /// across the IPC boundary *to* the webview. It lives in its own owner-only
+    /// file next to `settings.json` — see [`load_linear_api_key`] /
+    /// [`set_linear_api_key`] — which is where [`load`] reads it from.
+    ///
+    /// It must stay deserializable, though: `save_settings` is the one way a
+    /// freshly typed key reaches the backend, and the webview sends the whole
+    /// `Settings` (with the typed key in this field, empty when unchanged).
+    /// `skip_serializing_if` drops the always-empty webview copy from the blob
+    /// as well. A plain `#[serde(skip)]` silently discarded the typed key on
+    /// deserialization, so the form cleared without saving anything.
+    #[serde(skip_serializing, skip_serializing_if = "String::is_empty")]
     pub linear_api_key: String,
     /// Whether a Linear API key is stored, for the UI to gate on (the key
     /// itself never leaves the backend). Derived from the key file on every
@@ -270,8 +277,8 @@ pub fn clear_linear_api_key() -> Result<()> {
 
 fn load_under(path: &std::path::Path) -> Result<Settings> {
     let mut settings: Settings = json_store::load_or_default(path, "settings")?;
-    // Older builds stored the key *inside* `settings.json`; `#[serde(skip)]`
-    // now ignores it, so migrate a legacy copy into the secret store and evict
+    // Older builds stored the key *inside* `settings.json`; the secret store
+    // is now the only home for it, so migrate a legacy copy there and evict
     // it from the JSON blob (`.bak` copies go on the next save). Without this,
     // the first release that ships this would silently lose keys set by the
     // previous one.
@@ -368,14 +375,14 @@ fn save_under(path: &std::path::Path, settings: &Settings) -> Result<()> {
         .to_string_lossy()
         .into_owned();
     // A blank key means "unchanged" rather than "clear the stored key": the
-    // webview never receives the real key (`#[serde(skip)]`), so every save
-    // it sends has it blank, and treating that as a clear would log the user
-    // out of Linear on the next unrelated toggle. Clearing is explicit, via
-    // `clear_linear_api_key`.
+    // webview never receives the real key (it's `skip_serializing`), so every
+    // save it sends has it blank, and treating that as a clear would log the
+    // user out of Linear on the next unrelated toggle. Clearing is explicit,
+    // via `clear_linear_api_key`.
     let new_key = settings.linear_api_key.trim();
-    // Belt-and-suspenders: `#[serde(skip)]` already keeps the key out of the
-    // blob, but blanking it here means a future change to that attribute
-    // can't silently start writing the credential to `settings.json`.
+    // Belt-and-suspenders: the field is `skip_serializing`, but blanking it
+    // here means a future change to that attribute can't silently start
+    // writing the credential to `settings.json`.
     let mut scrubbed = settings.clone();
     scrubbed.linear_api_key.clear();
     scrubbed.linear_api_key_set = settings.linear_api_key_set || !new_key.is_empty();
@@ -672,6 +679,33 @@ mod tests {
     }
 
     #[test]
+    fn a_typed_key_survives_the_ipc_round_trip() {
+        // `save_settings` receives a whole `Settings` as JSON from the webview,
+        // with the freshly typed key in `linear_api_key` (that's the only way
+        // a new key gets in). The field is `skip_serializing` so the key never
+        // goes *out*, but it must still deserialize — a plain `#[serde(skip)]`
+        // dropped the typed value, so Settings appeared to save and immediately
+        // cleared, with nothing stored.
+        let dir = tempfile::tempdir().unwrap();
+        let path = settings_path_in(dir.path());
+        let ipc = serde_json::json!({
+            "editor_command": "zeditor",
+            "linear_api_key": "lin_api_typed",
+            "linear_api_key_set": true,
+        });
+        let settings: Settings = serde_json::from_value(ipc).unwrap();
+        assert_eq!(settings.linear_api_key, "lin_api_typed");
+
+        save_under(&path, &settings).unwrap();
+        let loaded = load_under(&path).unwrap();
+        assert_eq!(loaded.linear_api_key, "lin_api_typed");
+        assert!(loaded.linear_api_key_set);
+        // And the webview's own copy, on the way back out, still omits it.
+        let outbound = serde_json::to_value(&loaded).unwrap();
+        assert!(outbound.get("linear_api_key").is_none());
+    }
+
+    #[test]
     fn legacy_key_inside_settings_json_is_migrated_out() {
         let _guard = crate::secret::tests::FILE_ONLY_LOCK
             .lock()
@@ -704,6 +738,11 @@ mod tests {
         // A key file that exists but can't be read must surface as an error:
         // treating it as "not set" would make the Settings form offer to add
         // a key, and the next save would overwrite the one still on disk.
+        //
+        // The lock above is load-bearing for the *failure*: without it, a
+        // concurrent test setting the process-global file-only env var lets
+        // the OS store (which has no entry) answer first, so the broken file
+        // is never read and the load just looks "not set".
         let dir = tempfile::tempdir().unwrap();
         let path = settings_path_in(dir.path());
         // A directory in the key file's place: readable as a path, unreadable
