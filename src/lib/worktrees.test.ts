@@ -75,6 +75,25 @@ describe("askAgentToPreparePullRequest", () => {
     });
   });
 
+  it("treats a PR known only from the poll's pr_state as an update", async () => {
+    setRunningAgent();
+    vi.mocked(invoke).mockResolvedValueOnce("/tmp/pr-instructions.md");
+
+    await askAgentToPreparePullRequest({
+      ...wt,
+      pr_state: {
+        number: 7,
+        url: "https://github.com/x/y/pull/7",
+        state: "open",
+        is_draft: false,
+      },
+    });
+
+    expect(useStore.getState().preparingPr.get("corral/hulling")?.kind).toBe(
+      "update",
+    );
+  });
+
   it("does not redirect the prompt if selection changes while saving the attachment", async () => {
     let resolveAttachment: (path: string) => void = () => {};
     const submitTo = setRunningAgent();

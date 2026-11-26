@@ -1,6 +1,6 @@
 import { useStore } from "../store";
 import type { PrInfo, Worktree } from "../types";
-import { orderProjects, wtId } from "../utils";
+import { orderProjects, resolvePrInfo, wtId } from "../utils";
 import { selectWorktree } from "./actions";
 import { startAgent } from "./agent-actions";
 import { loadAll } from "./data";
@@ -315,7 +315,10 @@ export async function askAgentToPreparePullRequest(
   const preparingPr = new Map(initial.preparingPr);
   preparingPr.set(id, {
     token,
-    kind: initial.prInfoByWtId.get(id)?.state === "open" ? "update" : "create",
+    kind:
+      resolvePrInfo(wt, initial.prInfoByWtId)?.state === "open"
+        ? "update"
+        : "create",
     initialAhead: wt.status?.ahead ?? 0,
     waits: 0,
   });

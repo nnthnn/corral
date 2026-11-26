@@ -32,6 +32,11 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 /// `src/lib/window-chrome.ts`/`src/components/WindowControls.tsx`);
 /// anything else — including unknown/future desktop environments — defaults
 /// to real decorations rather than guessing wrong toward "hide everything."
+///
+/// Only Linux calls this (`should_decorate`'s non-Linux branch is a constant),
+/// so a non-test macOS build would otherwise warn it's dead code. `test` keeps
+/// the unit tests below compiling on every platform.
+#[cfg(any(target_os = "linux", test))]
 fn decorations_for_desktop(current_desktop: Option<&str>) -> bool {
     // The tiling-WM list lives in `corral_core::diagnostics` so `corral
     // doctor` reports the same classification this function acts on.

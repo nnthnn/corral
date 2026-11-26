@@ -167,6 +167,40 @@ describe("Detail", () => {
     expect(screen.getByText("Merged into main.")).toBeInTheDocument();
   });
 
+  it("shows the merged state from the poll's pr_state before a live fetch has run", () => {
+    const mergedViaPoll: Worktree = {
+      ...wt,
+      pr_state: {
+        number: 3,
+        url: "https://x",
+        state: "merged",
+        is_draft: false,
+      },
+      status: {
+        branch: "feat/hulling",
+        ahead: 0,
+        behind: 0,
+        staged: 0,
+        modified: 0,
+        untracked: 0,
+        added: 0,
+        removed: 0,
+        conflicts: 0,
+        // Squash merge: local ancestry never catches up.
+        commits_ahead_of_base: 3,
+        merged_into_base: false,
+        conflicts_with_base: false,
+        has_remote: true,
+        last_commit_message: "",
+        last_commit_time: 0,
+        base_added: 0,
+        base_removed: 0,
+      },
+    };
+    render(<Detail wt={mergedViaPoll} />);
+    expect(screen.getByText("Merged into main.")).toBeInTheDocument();
+  });
+
   it("prefers a confirmed no-PR from the live store over a stale truthy wt.pr_state", () => {
     useStore.setState({
       prInfoByWtId: new Map([["corral/hulling", null]]),

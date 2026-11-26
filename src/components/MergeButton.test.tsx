@@ -298,6 +298,18 @@ describe("MergeButton push+PR button (has_remote)", () => {
     expect(screen.queryByText("Push updates")).not.toBeInTheDocument();
     expect(screen.queryByText("Open PR")).not.toBeInTheDocument();
   });
+
+  it("shows Remove when only the poll's pr_state reports the PR merged", () => {
+    render(<MergeButton wt={{ ...remoteAheadWt, pr_state: mergedPrInfo }} />);
+    expect(screen.getByText("Remove")).toBeInTheDocument();
+    expect(screen.queryByText("Open PR")).not.toBeInTheDocument();
+  });
+
+  it("offers Merge PR when only the poll's pr_state reports an open PR", () => {
+    render(<MergeButton wt={{ ...remoteAheadWt, pr_state: openPrInfo }} />);
+    expect(screen.getByText("Merge PR")).toBeInTheDocument();
+    expect(screen.queryByText("Open PR")).not.toBeInTheDocument();
+  });
 });
 
 describe("MergeButton Merge PR button (open PR, has_remote)", () => {

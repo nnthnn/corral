@@ -26,7 +26,7 @@ import {
 } from "../lib/checks";
 import { useStore } from "../store";
 import type { CheckRun, PrComment, PrInfo, PrReview, Worktree } from "../types";
-import { relativeTime, wtId } from "../utils";
+import { relativeTime, resolvePrInfo, wtId } from "../utils";
 import { Button } from "./Button";
 import { LassoSpinner } from "./LassoSpinner";
 import { MarkdownPreview } from "./MarkdownPreview";
@@ -373,7 +373,7 @@ export function PrPane({
   const id = wtId(wt);
   const details = useStore((s) => s.prDetailsByWtId.get(id));
   const checkList = useStore((s) => s.checksByWtId.get(id)) ?? [];
-  const prInfo = useStore((s) => s.prInfoByWtId.get(id));
+  const prInfo = useStore((s) => resolvePrInfo(wt, s.prInfoByWtId));
   const markingReady = useStore((s) => s.markingPrReadyIds.has(id));
   const [checksOpen, setChecksOpen] = useState(false);
   const [approvalsOpen, setApprovalsOpen] = useState(false);
