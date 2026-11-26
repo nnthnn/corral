@@ -36,24 +36,39 @@ pub async fn create_project(parent: String, name: String) -> Result<String, Stri
     }
     let create_name = name.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        corral_core::project_create::create(&create_name, &parent)
+        corral_core::project_create::create(&create_name, &parent).map(|_| create_name)
     })
     .await
     .map_err(|e| e.to_string())?
-    .map_err(project_create_error)?;
-    Ok(name)
+    .map_err(|e| project_error(e, ProjectAction::Create))
 }
 
-/// The actionable copy for `project_create`'s two expected failures.
-fn project_create_error(e: corral_core::Error) -> String {
+/// What a project dialog was trying to do, which decides how its two expected
+/// failures should be worded. Kept with the errors rather than in the dialogs,
+/// so both project commands describe the same failure the same way.
+#[derive(Clone, Copy)]
+enum ProjectAction {
+    /// "New project": the folder is created at `parent/name`.
+    Create,
+    /// "Add project": an existing folder is registered.
+    Register,
+}
+
+/// The actionable copy for the two failures a project dialog can expect —
+/// the folder already having contents it can't adopt, and a name that can't
+/// be a folder name — instead of the bare "name: reason" Display string.
+fn project_error(e: corral_core::Error, action: ProjectAction) -> String {
     match e {
-        corral_core::Error::ProjectDirNotEmpty(dir) => format!(
-            "{} already exists and isn't empty — pick a different name or location, or use Add project to register it",
-            dir.display()
-        ),
-        // `create` validates names in `project_create`; give the dialog the
-        // same actionable copy the non-empty case gets instead of the bare
-        // "invalid name: ..." Display string.
+        corral_core::Error::ProjectDirNotEmpty(dir) => match action {
+            ProjectAction::Create => format!(
+                "{} already exists and isn't empty — pick a different name or location, or use Add project to register it",
+                dir.display()
+            ),
+            ProjectAction::Register => format!(
+                "{} isn't a git repository and isn't empty — pick an existing repo, or an empty folder to start a new project",
+                dir.display()
+            ),
+        },
         corral_core::Error::InvalidName(_) => "that name can't be used as a folder name — use a single path segment (no slashes, no surrounding spaces)".to_string(),
         e => e.to_string(),
     }
@@ -73,23 +88,13 @@ fn project_create_error(e: corral_core::Error) -> String {
 /// (a keyring read), none of which belongs on the GTK main thread.
 #[tauri::command]
 pub async fn add_project(path: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || add_project_blocking(path))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-/// The blocking half of [`add_project`], kept separate so the command can hand
-/// it the whole body unchanged.
-fn add_project_blocking(path: String) -> Result<String, String> {
-    let canonical = std::fs::canonicalize(&path).map_err(|e| format!("{path}: {e}"))?;
-    match corral_core::project_create::register_existing(&canonical) {
-        Ok(name) => Ok(name),
-        Err(corral_core::Error::ProjectDirNotEmpty(dir)) => Err(format!(
-            "{} isn't a git repository and isn't empty — pick an existing repo, or an empty folder to start a new project",
-            dir.display()
-        )),
-        Err(e) => Err(e.to_string()),
-    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let canonical = std::fs::canonicalize(&path).map_err(|e| format!("{path}: {e}"))?;
+        corral_core::project_create::register_existing(&canonical)
+            .map_err(|e| project_error(e, ProjectAction::Register))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Remove `project` from corral entirely: stops any running session,

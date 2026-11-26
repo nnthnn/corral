@@ -48,6 +48,13 @@ pub const SECRET_FILE_ONLY_ENV: &str = "CORRAL_SECRET_FILE_ONLY";
 pub enum Backend {
     /// The OS credential store (Secret Service / Keychain / Credential
     /// Manager). The value is not in any corral-readable plaintext file.
+    ///
+    /// That's the whole claim: on Linux this is a session-bus service, so any
+    /// other process running as the same user — including one started from
+    /// this app's own agent terminals — can ask it for the entry. It keeps
+    /// the key out of config files and backups and on macOS/Windows behind
+    /// their per-app protection; it does not isolate corral from other
+    /// programs running as you. Don't let the wording imply it does.
     OsStore,
     /// `~/.config/corral/<name>` with `0600` permissions.
     File,
