@@ -282,7 +282,23 @@ on a Mac — keep that in mind when touching `process.rs`, `caffeinate.rs`, or
   (`get_settings`, `save_settings`, `linear_key_storage`), project lifecycle
   (`add_project`, and `remove_project` — whose `worktree::list()` is the same
   full `git status` scan `list_worktrees` was converted for), and
-  `rename_worktree`. Synchronous **by design**: the per-keystroke session hot
+  `rename_worktree`.
+  - **An `async` command's body is a Tokio task, so `spawn_blocking` is not
+    optional there either** — anything blocking left in the body stalls a
+    pool worker for its duration, and on Linux that includes every
+    `secret::*` call (a Secret Service round trip that can wait on an unlock
+    prompt). `save_settings` therefore puts its `sync_caffeinate` reload
+    *inside* the `spawn_blocking` closure rather than after it, and
+    `remove_project`'s per-worktree teardown (killing children, then the
+    flock-guarded session/note stores) is a `spawn_blocking` body of its own.
+    That's why the three registries (`SessionRegistry`, `provision::Registry`,
+    `run::Registry`) are cheaply cloneable via `handle()`: a `State` borrow
+    can't cross into the closure, a clone can.
+  - **`kill_session_best_effort` is reachable from a blocking thread** and its
+    browser-host teardown is a window operation, so it hops to the main thread
+    with `run_on_main_thread`. `remove_worktree` was already calling it from
+    an `async` command before that fix.
+  Synchronous **by design**: the per-keystroke session hot
   path (`write_session`/`resize_session`/`attach_session`, where a thread hop
   costs more than the work), and the `browser_*` window commands (window ops
   must be on the main thread). Synchronous **and still wrong** — next
@@ -290,6 +306,13 @@ on a Mac — keep that in mind when touching `process.rs`, `caffeinate.rs`, or
   `revert_file`, `list_worktree_dir`, `read_worktree_file`, `send_notification`
   (blocking DBus), `memory_usage` (polled `/proc` walk), `save_pasted_image`,
   `save_text_attachment`, `resolve_run_command`, `list_run_targets`.
+- **Clearing per-worktree state goes through
+  `worktree::clear_worktree_state(keys)`.** All three stores (session ids,
+  notes, titles) have to be cleared together — `remove` and project removal
+  both learned that the hard way, once for `--resume` and once for titles
+  surviving a project re-add. It clears each store in one locked write via
+  `KeyedStore::remove_keys`, so don't reintroduce a per-worktree `set(key, "")`
+  loop: that's one flock + full re-read/re-serialize per key.
 - **Rust changes need a full app restart.** Vite HMR only reloads the
   frontend; new/changed Tauri commands or Rust logic won't take effect until
   the binary rebuilds (e.g. `just run`). Frontend-only changes hot-reload
