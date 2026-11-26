@@ -9,7 +9,7 @@ import { loadDir } from "../lib/files";
 import { showError } from "../lib/toasts";
 import { currentWt, useStore } from "../store";
 import type { ChangedFile, PrInfo, Worktree } from "../types";
-import { isMergeComplete, wtId } from "../utils";
+import { isMergeComplete, resolvePrInfo, wtId } from "../utils";
 import { Button } from "./Button";
 import { ChangeStat, SyncIcon } from "./ChangeStatusBadges";
 import { FileTree } from "./FileTree";
@@ -94,7 +94,7 @@ export function ChangesPane() {
    * same condition that makes the center pane's PR tab appear, so this header
    * shortcut and that tab can't disagree about whether a PR exists. */
   const prInfo = useStore((s) =>
-    worktreeId ? (s.prInfoByWtId.get(worktreeId) ?? null) : null,
+    wt ? resolvePrInfo(wt, s.prInfoByWtId) : null,
   );
   const files = changes?.files ?? [];
   const base = changes?.base;
@@ -116,9 +116,12 @@ export function ChangesPane() {
   const justMerged = useStore((s) =>
     worktreeId ? s.justMergedIds.has(worktreeId) : false,
   );
-  /** A merged worktree is treated as read-only: its work has landed, so
+  /** A merged worktree's *Changes list* is read-only: its work has landed, so
    * discarding a working-tree edit is pure loss with no way to get it back
-   * from the branch. Copy-path and diff viewing stay available. */
+   * from the branch. Copy-path and diff viewing stay available. Scope is
+   * deliberate: the Files tab and the Diff view are untouched, and any edit
+   * made *after* the merge keeps the worktree out of this state entirely
+   * (`isMergeComplete`'s dirty veto), so it still offers Discard. */
   const merged = wt ? isMergeComplete(wt.status, prInfo, justMerged) : false;
 
   // A discard confirmation belongs to a file *in one worktree*, but the pane

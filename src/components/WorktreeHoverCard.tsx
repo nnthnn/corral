@@ -5,7 +5,13 @@ import { setWorktreeNote } from "../lib/worktrees";
 import { useStore } from "../store";
 import type { Worktree } from "../types";
 import type { FeatureStatus } from "../utils";
-import { relativeTime, summarizeText, wtId } from "../utils";
+import {
+  isMergeComplete,
+  relativeTime,
+  resolvePrInfo,
+  summarizeText,
+  wtId,
+} from "../utils";
 import { FeatureStatusIcon } from "./FeatureStatusIcon";
 import { MergeButton } from "./MergeButton";
 import { RebaseButton } from "./RebaseButton";
@@ -37,7 +43,9 @@ export function WorktreeHoverCard({
     (s) => s.sessions.get(`${wt.project}/${wt.feature}`)?.last_summary ?? null,
   );
   const summary = rawSummary ? summarizeText(rawSummary) : null;
-  const prInfo = useStore((st) => st.prInfoByWtId.get(wtId(wt))) ?? null;
+  const prInfo = useStore((st) => resolvePrInfo(wt, st.prInfoByWtId));
+  const justMerged = useStore((st) => st.justMergedIds.has(wtId(wt)));
+  const mergeComplete = isMergeComplete(wt.status, prInfo, justMerged);
   const selected = useStore((st) => st.selectedId === wtId(wt));
   const [note, setNote] = useState(wt.note);
   const noteRef = useRef(note);
@@ -84,7 +92,7 @@ export function WorktreeHoverCard({
         )}
         <FeatureStatusIcon status={status} />
       </div>
-      {s?.conflicts_with_base && status !== "merged" && (
+      {s?.conflicts_with_base && !mergeComplete && (
         // Suppressed once merged: a squash merge rewrites the commit, so the
         // branch keeps "conflicting" with the base it already landed in. The
         // card only ever offers Remove at that point, and the rebase advice is

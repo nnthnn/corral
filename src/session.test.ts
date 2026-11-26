@@ -773,4 +773,28 @@ describe("SessionManager show() races", () => {
     expect(panes()).toHaveLength(1);
     expect(panes()[0]).not.toHaveClass("hidden");
   });
+
+  it("keeps the newest terminal visible when a cached entry's show() follows an older, still-attaching one", async () => {
+    // `b` is new, so its first `show()` awaits its attach like `a`'s. Once
+    // both are cached, re-showing `b` awaits nothing — and `a`'s slow attach
+    // resolving afterwards must not re-reveal `a`: the post-await checkpoint
+    // has to notice it's no longer the active id.
+    const resolvers = deferredAttach();
+    const mgr = new SessionManager({ container, fontSize: 13 });
+
+    const first = mgr.show("corral/first");
+    let secondSettled = false;
+    void mgr.show("corral/second").then(() => {
+      secondSettled = true;
+    });
+    resolvers[1]?.();
+    await vi.waitFor(() => expect(secondSettled).toBe(true));
+    // `b` is cached now, so this returns without awaiting any attach.
+    void mgr.show("corral/second");
+    resolvers[0]?.();
+    await first;
+
+    expect(panes()[0]).toHaveClass("hidden");
+    expect(panes()[1]).not.toHaveClass("hidden");
+  });
 });

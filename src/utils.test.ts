@@ -7,12 +7,14 @@ import {
   formatBytes,
   highlightMatch,
   isFullyMerged,
+  isMergeComplete,
   matchesWorktreeFilter,
   moveProject,
   orderedWorktreeIds,
   orderProjects,
   relativeTime,
   reorderProjects,
+  resolvePrInfo,
   rightSlotIndicator,
   sessionId,
   shortenPath,
@@ -304,6 +306,86 @@ describe("isFullyMerged", () => {
   it("is false for an open or closed PR", () => {
     expect(isFullyMerged(status(), pr({ state: "open" }), false)).toBe(false);
     expect(isFullyMerged(status(), pr({ state: "closed" }), false)).toBe(false);
+  });
+});
+
+describe("resolvePrInfo", () => {
+  it("prefers the live per-worktree fetch, including a confirmed 'no PR'", () => {
+    const wt = { ...worktree(status()), pr_state: pr({ number: 7 }) };
+    expect(resolvePrInfo(wt, new Map([["corral/churning", null]]))).toBeNull();
+    expect(
+      resolvePrInfo(wt, new Map([["corral/churning", pr({ number: 9 })]])),
+    ).toEqual(pr({ number: 9 }));
+  });
+
+  it("falls back to the coarse poll's pr_state when the live fetch hasn't run", () => {
+    const wt = { ...worktree(status()), pr_state: pr({ number: 7 }) };
+    expect(resolvePrInfo(wt, new Map())).toEqual(pr({ number: 7 }));
+    expect(resolvePrInfo(worktree(status()), new Map())).toBeNull();
+  });
+});
+
+describe("isMergeComplete", () => {
+  it("trusts a merged PR over local ancestry, like a squash merge needs", () => {
+    expect(
+      isMergeComplete(
+        status({
+          has_remote: true,
+          commits_ahead_of_base: 3,
+          merged_into_base: false,
+          conflicts_with_base: true,
+        }),
+        pr({ state: "merged" }),
+        false,
+      ),
+    ).toBe(true);
+  });
+
+  it("is never true without a status or before a PR is known", () => {
+    expect(isMergeComplete(null, pr({ state: "merged" }), false)).toBe(false);
+    expect(isMergeComplete(status({ has_remote: true }), null, false)).toBe(
+      false,
+    );
+  });
+
+  it("lets a dirty tree veto a merged PR, so post-merge edits stay discardable", () => {
+    // Without this, the Changes pane hides Discard for edits that are *not*
+    // in the branch (or the merged PR) — losing the only way to remove them —
+    // while the sidebar's dirty-aware dot says "in-progress".
+    for (const dirty of [
+      { staged: 1 },
+      { modified: 1 },
+      { untracked: 1 },
+    ] as const) {
+      expect(
+        isMergeComplete(
+          status({ has_remote: true, ...dirty }),
+          pr({ state: "merged" }),
+          false,
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it("falls back to local merge state without a remote", () => {
+    expect(
+      isMergeComplete(status({ merged_into_base: true }), null, false),
+    ).toBe(true);
+    expect(isMergeComplete(status(), null, true)).toBe(true);
+    expect(
+      isMergeComplete(
+        status({ modified: 1, merged_into_base: true }),
+        null,
+        false,
+      ),
+    ).toBe(false);
+    expect(
+      isMergeComplete(
+        status({ has_remote: false, merged_into_base: true }),
+        pr({ state: "merged" }),
+        false,
+      ),
+    ).toBe(true);
   });
 });
 

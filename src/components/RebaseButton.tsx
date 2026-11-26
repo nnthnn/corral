@@ -1,8 +1,8 @@
 import { Loader2 } from "lucide-react";
 import { askClaudeToRebase, rebaseWorktree } from "../lib/worktrees";
 import { useStore } from "../store";
-import type { Worktree } from "../types";
-import { isMergeComplete, wtId } from "../utils";
+import type { PrInfo, Worktree } from "../types";
+import { isMergeComplete, resolvePrInfo, wtId } from "../utils";
 import { Button } from "./Button";
 
 type RebaseButtonState =
@@ -12,7 +12,8 @@ type RebaseButtonState =
 
 export function rebaseButtonState(
   wt: Worktree,
-  mergeComplete = false,
+  prInfo: PrInfo | null = null,
+  justMerged = false,
 ): RebaseButtonState {
   const st = wt.status;
   // A merged branch has nothing left to rebase, even when the local ancestry
@@ -20,7 +21,14 @@ export function rebaseButtonState(
   // `base` has moved in a way `conflicts_with_base` sees as divergent forever.
   // `MergeButton` already shows "Remove" in that state, so offering "Rebase"
   // beside it (see DEV-9) was pure noise.
-  if (mergeComplete) return { kind: "hidden" };
+  //
+  // Checked here rather than by the caller so every caller — including tests
+  // and any future surface — gets it: a merged worktree with the defaults
+  // (`prInfo: null`, `justMerged: false`) still hides the button via
+  // `merged_into_base`. Pass the caller's live `prInfo`/`justMerged` when it
+  // has them, so a squash-merged PR (which local ancestry can't see) hides it
+  // too.
+  if (isMergeComplete(st, prInfo, justMerged)) return { kind: "hidden" };
   if (!st?.conflicts_with_base) return { kind: "hidden" };
   const dirty = st.staged + st.modified + st.untracked;
   if (dirty > 0) {
@@ -55,11 +63,8 @@ export function RebaseButton({
   const id = wtId(wt);
   const rebasing = useStore((s) => s.rebasingIds.has(id));
   const justMerged = useStore((s) => s.justMergedIds.has(id));
-  const prInfo = useStore((s) => s.prInfoByWtId.get(id) ?? null);
-  const state = rebaseButtonState(
-    wt,
-    isMergeComplete(wt.status, prInfo, justMerged),
-  );
+  const prInfo = useStore((s) => resolvePrInfo(wt, s.prInfoByWtId));
+  const state = rebaseButtonState(wt, prInfo, justMerged);
 
   if (state.kind === "hidden") return null;
   if (state.kind === "note") {

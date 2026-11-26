@@ -76,9 +76,47 @@ describe("rebaseButtonState", () => {
   });
 
   it("is hidden once the branch is merged, even while it still conflicts", () => {
+    // The merged check lives inside `rebaseButtonState`, so callers that don't
+    // thread `prInfo`/`justMerged` through still get it for a squash merge the
+    // local ancestry check can see.
     expect(
-      rebaseButtonState(wtWith({ conflicts_with_base: true }), true),
+      rebaseButtonState(
+        wtWith({ conflicts_with_base: true, merged_into_base: true }),
+      ),
     ).toEqual({ kind: "hidden" });
+    // …and with the caller's live PR/justMerged, for a squash merge it can't.
+    expect(
+      rebaseButtonState(
+        wtWith({ conflicts_with_base: true, has_remote: true }),
+        {
+          number: 1,
+          url: "https://github.com/x/y/pull/1",
+          state: "merged",
+          is_draft: false,
+        },
+        false,
+      ),
+    ).toEqual({ kind: "hidden" });
+    expect(
+      rebaseButtonState(wtWith({ conflicts_with_base: true }), null, true),
+    ).toEqual({ kind: "hidden" });
+  });
+
+  it("keeps offering a rebase when a merged PR has post-merge edits", () => {
+    // Dirty vetoes "merged" (same rule as `isMergeComplete`), so the fix for
+    // "work landed after the merge is still work" reaches this button too.
+    expect(
+      rebaseButtonState(
+        wtWith({ conflicts_with_base: true, has_remote: true, modified: 1 }),
+        {
+          number: 1,
+          url: "https://github.com/x/y/pull/1",
+          state: "merged",
+          is_draft: false,
+        },
+        false,
+      ),
+    ).toEqual({ kind: "note", text: "Uncommitted changes" });
   });
 });
 
