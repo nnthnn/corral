@@ -53,6 +53,7 @@
     "allow-linear-search",
     "allow-linear-recent",
     "allow-linear-issue",
+    "allow-linear-set-api-key",
     "allow-linear-clear-api-key",
     "allow-linear-key-storage",
     "allow-open-in-zed",

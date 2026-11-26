@@ -15,6 +15,17 @@ use crate::error::{Error, Result};
 
 const ENDPOINT: &str = "https://api.linear.app/graphql";
 
+/// A named thing Linear gives a color (`WorkflowState`, `Project`), so the
+/// name and its display color can't drift apart as sibling fields — a row
+/// that borrowed another field's color would be a type error, not a review
+/// catch. `color` is a hex string (`#5E6AD2`); it's an `Option` because a
+/// payload that omits it must not fail the whole list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NamedColor {
+    pub name: String,
+    pub color: Option<String>,
+}
+
 /// Summary row returned by [`search`] — enough for a result list without
 /// pulling whole ticket bodies for every hit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -23,19 +34,13 @@ pub struct LinearIssueSummary {
     pub identifier: String,
     pub title: String,
     pub url: String,
-    /// Workflow-state name (e.g. "In Progress"), when Linear returned one.
-    pub state: Option<String>,
+    /// Workflow state (e.g. "In Progress"), when Linear returned one.
+    pub state: Option<NamedColor>,
     /// Team name, when Linear returned one.
     pub team: Option<String>,
-    /// Project name, when the issue belongs to one (`None` for issues that
-    /// aren't in a project — Linear makes the field optional).
-    pub project: Option<String>,
-    /// The status's hex color (`#5E6AD2`), for the row's status badge.
-    /// Linear documents it as a CSS color; parsed as an Option so a payload
-    /// that omits it can't fail the whole list.
-    pub state_color: Option<String>,
-    /// The project's hex color, for the project badge.
-    pub project_color: Option<String>,
+    /// The issue's project (`None` for issues that aren't in one — Linear
+    /// makes the field optional).
+    pub project: Option<NamedColor>,
 }
 
 /// A full ticket, including its description, ready to be formatted into an
@@ -48,11 +53,9 @@ pub struct LinearIssue {
     /// Markdown body. `None` when the ticket has no description.
     pub description: Option<String>,
     pub url: String,
-    pub state: Option<String>,
+    pub state: Option<NamedColor>,
     pub team: Option<String>,
-    pub project: Option<String>,
-    pub state_color: Option<String>,
-    pub project_color: Option<String>,
+    pub project: Option<NamedColor>,
     pub assignee: Option<String>,
     pub priority: Option<String>,
     pub labels: Vec<String>,
@@ -68,8 +71,6 @@ impl LinearIssue {
             state: self.state.clone(),
             team: self.team.clone(),
             project: self.project.clone(),
-            state_color: self.state_color.clone(),
-            project_color: self.project_color.clone(),
         }
     }
 }
@@ -168,17 +169,26 @@ fn str_at(value: &Value, pointer: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// A nested object (`state`/`project`) as a [`NamedColor`], or `None` when it's
+/// absent or has no name — the name is what the row displays, so a colorful
+/// nameless object is worthless.
+fn named_color_at(value: &Value, pointer: &str) -> Option<NamedColor> {
+    let name = str_at(value, &format!("{pointer}/name"))?;
+    Some(NamedColor {
+        name,
+        color: str_at(value, &format!("{pointer}/color")),
+    })
+}
+
 fn parse_summary(node: &Value) -> Option<LinearIssueSummary> {
     Some(LinearIssueSummary {
         id: str_at(node, "/id")?,
         identifier: str_at(node, "/identifier")?,
         title: str_at(node, "/title")?,
         url: str_at(node, "/url").unwrap_or_default(),
-        state: str_at(node, "/state/name"),
+        state: named_color_at(node, "/state"),
         team: str_at(node, "/team/name"),
-        project: str_at(node, "/project/name"),
-        state_color: str_at(node, "/state/color"),
-        project_color: str_at(node, "/project/color"),
+        project: named_color_at(node, "/project"),
     })
 }
 
@@ -198,11 +208,9 @@ fn parse_issue(node: &Value) -> Option<LinearIssue> {
         title: str_at(node, "/title")?,
         description: str_at(node, "/description"),
         url: str_at(node, "/url").unwrap_or_default(),
-        state: str_at(node, "/state/name"),
+        state: named_color_at(node, "/state"),
         team: str_at(node, "/team/name"),
-        project: str_at(node, "/project/name"),
-        state_color: str_at(node, "/state/color"),
-        project_color: str_at(node, "/project/color"),
+        project: named_color_at(node, "/project"),
         assignee: str_at(node, "/assignee/name"),
         priority: str_at(node, "/priorityLabel"),
         labels: node
@@ -356,11 +364,21 @@ mod tests {
         .unwrap();
         let summary = parse_summary(&node).unwrap();
         assert_eq!(summary.identifier, "ENG-123");
-        assert_eq!(summary.state.as_deref(), Some("In Progress"));
+        assert_eq!(
+            summary.state,
+            Some(NamedColor {
+                name: "In Progress".into(),
+                color: Some("#f2c94c".into()),
+            })
+        );
         assert_eq!(summary.team.as_deref(), Some("Engineering"));
-        assert_eq!(summary.project.as_deref(), Some("Q3 Auth"));
-        assert_eq!(summary.state_color.as_deref(), Some("#f2c94c"));
-        assert_eq!(summary.project_color.as_deref(), Some("#5e6ad2"));
+        assert_eq!(
+            summary.project,
+            Some(NamedColor {
+                name: "Q3 Auth".into(),
+                color: Some("#5e6ad2".into()),
+            })
+        );
     }
 
     #[test]
@@ -380,7 +398,16 @@ mod tests {
         // No `project` in the payload (or a null one) is the normal case:
         // most issues aren't in a project, and it must not fail the parse.
         assert_eq!(rows[0].project, None);
-        assert_eq!(rows[0].project_color, None);
+        // A state with no color is still a state: the name is what matters,
+        // and a missing color degrades to the neutral badge rather than
+        // dropping the whole field.
+        assert_eq!(
+            rows[0].state,
+            Some(NamedColor {
+                name: "Todo".into(),
+                color: None,
+            })
+        );
     }
 
     #[test]
@@ -405,9 +432,18 @@ mod tests {
         assert_eq!(issue.assignee.as_deref(), Some("Ada"));
         assert_eq!(issue.priority.as_deref(), Some("High"));
         assert_eq!(issue.labels, vec!["bug", "auth"]);
-        assert_eq!(issue.project.as_deref(), Some("Q3 Auth"));
-        assert_eq!(issue.state_color.as_deref(), Some("#e2e2e2"));
-        assert_eq!(issue.project_color.as_deref(), Some("#5e6ad2"));
+        assert_eq!(
+            issue.project.as_ref().map(|p| p.name.as_str()),
+            Some("Q3 Auth")
+        );
+        assert_eq!(
+            issue.state.as_ref().and_then(|s| s.color.as_deref()),
+            Some("#e2e2e2")
+        );
+        assert_eq!(
+            issue.project.as_ref().and_then(|p| p.color.as_deref()),
+            Some("#5e6ad2")
+        );
         assert!(issue.description.unwrap().contains("Repro steps"));
     }
 

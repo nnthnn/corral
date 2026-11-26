@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useStore } from "../store";
 import type { LinearIssue, LinearIssueSummary } from "../types";
@@ -12,11 +18,9 @@ const summary: LinearIssueSummary = {
   identifier: "ENG-123",
   title: "Fix login timeout",
   url: "https://linear.app/acme/issue/ENG-123",
-  state: "In Progress",
+  state: { name: "In Progress", color: "#f2c94c" },
   team: "Engineering",
-  project: "Q3 Auth",
-  state_color: "#f2c94c",
-  project_color: "#5e6ad2",
+  project: { name: "Q3 Auth", color: "#5e6ad2" },
 };
 
 const recentSummary: LinearIssueSummary = {
@@ -24,11 +28,9 @@ const recentSummary: LinearIssueSummary = {
   identifier: "ENG-119",
   title: "Recently touched ticket",
   url: "https://linear.app/acme/issue/ENG-119",
-  state: "Todo",
+  state: { name: "Todo", color: "#e2e2e2" },
   team: "Engineering",
   project: null,
-  state_color: "#e2e2e2",
-  project_color: null,
 };
 
 const issue: LinearIssue = {
@@ -38,6 +40,14 @@ const issue: LinearIssue = {
   priority: "High",
   labels: ["bug"],
 };
+
+/** The badge box carrying `label` (the element the fill is applied to), as
+ * opposed to the text node inside it. */
+function badge(label: string): HTMLElement {
+  const el = document.querySelector(`[data-linear-badge="${label}"]`);
+  if (!(el instanceof HTMLElement)) throw new Error(`no badge for ${label}`);
+  return el;
+}
 
 function openWithKey(): void {
   useStore.setState((s) => ({
@@ -108,10 +118,8 @@ describe("LinearIssueDialog", () => {
     openWithKey();
     render(<LinearIssueDialog />);
 
-    const project = (await screen.findByText("Q3 Auth")).closest(
-      "[title]",
-    ) as HTMLElement;
-    const status = screen.getByText("In Progress");
+    const project = await screen.findByTitle("Q3 Auth");
+    const status = badge("In Progress");
     // Two independent fills, so one badge never borrows the other's accent.
     expect(project.style.backgroundColor).not.toBe("");
     expect(status.style.backgroundColor).not.toBe("");
@@ -127,14 +135,14 @@ describe("LinearIssueDialog", () => {
     // Linear's `Todo` state is #e2e2e2. Rendering that verbatim would be a
     // near-white chip with black text — the jarring combination on a dark UI.
     mockLinear({
-      recent: [{ ...summary, state: "Todo", state_color: "#e2e2e2" }],
+      recent: [{ ...summary, state: { name: "Todo", color: "#e2e2e2" } }],
     });
     openWithKey();
     render(<LinearIssueDialog />);
 
-    const status = await screen.findByText("Todo");
-    expect(status.getAttribute("style")).not.toMatch(/e2e2e2|226, 226, 226/i);
-    expect(status.style.color).toMatch(/ffffff|255, 255, 255/i);
+    const box = await waitFor(() => badge("Todo"));
+    expect(box.getAttribute("style")).not.toMatch(/e2e2e2|226, 226, 226/i);
+    expect(box.style.color).toMatch(/ffffff|255, 255, 255/i);
   });
 
   it("picks ink per fill: white on a dark one, near-black on a mid amber", async () => {
@@ -142,16 +150,12 @@ describe("LinearIssueDialog", () => {
     openWithKey();
     render(<LinearIssueDialog />);
 
-    const project = (await screen.findByText("Q3 Auth")).closest(
-      "[title]",
-    ) as HTMLElement;
+    const project = await screen.findByTitle("Q3 Auth");
     // #5e6ad2 clamps to a dark indigo → white ink.
     expect(project.style.color).toMatch(/ffffff|255, 255, 255/i);
     // #f2c94c clamps to a mid amber → the higher-contrast choice is dark ink,
     // the same call the reference palette makes for its amber badge.
-    expect(screen.getByText("In Progress").style.color).toMatch(
-      /121212|18, 18, 18/i,
-    );
+    expect(badge("In Progress").style.color).toMatch(/121212|18, 18, 18/i);
   });
 
   it("falls back to the neutral badge when a color isn't hex", async () => {
@@ -159,20 +163,18 @@ describe("LinearIssueDialog", () => {
       recent: [
         {
           ...summary,
-          state_color: "rgb(1, 2, 3)",
-          project_color: "hotpink",
+          state: { name: "In Progress", color: "rgb(1, 2, 3)" },
+          project: { name: "Q3 Auth", color: "hotpink" },
         },
       ],
     });
     openWithKey();
     render(<LinearIssueDialog />);
 
-    const chip = (await screen.findByText("Q3 Auth")).closest(
-      "[title]",
-    ) as HTMLElement;
+    const chip = await screen.findByTitle("Q3 Auth");
     // No inline colors at all: the neutral border/muted-text pair applies.
     expect(chip.getAttribute("style")).toBeNull();
-    expect(screen.getByText("In Progress").getAttribute("style")).toBeNull();
+    expect(badge("In Progress").getAttribute("style")).toBeNull();
   });
 
   it("replaces the recent list with search results once you type", async () => {

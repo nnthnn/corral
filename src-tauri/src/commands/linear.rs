@@ -5,10 +5,11 @@
 //! calls, so running them inline on the IPC thread would freeze the UI for
 //! the duration of the request.
 //!
-//! None of them take the API key as an argument: it's a credential, and the
-//! webview never receives it (`Settings::linear_api_key` is `#[serde(skip)]`).
-//! Each command loads it from the config dir through
-//! `corral_core::settings::load` — the same place `get_settings` reads.
+//! The read commands take no API key: it's a credential, and the webview never
+//! receives it (`Settings::linear_api_key` is `#[serde(skip)]`, so it crosses
+//! the IPC boundary in neither direction). Each loads it from the config dir
+//! through `corral_core::settings::load` — the same place `get_settings`
+//! reads — and `linear_set_api_key` is the only way a new one gets in.
 
 use super::StrErr;
 
@@ -62,10 +63,28 @@ pub async fn linear_issue(id: String) -> Result<corral_core::linear::LinearIssue
     .str_err()
 }
 
+/// Store the Linear API key typed into Settings.
+///
+/// The key is its own argument rather than a field on the `save_settings`
+/// blob: `Settings.linear_api_key` is `#[serde(skip)]`, so the whole-settings
+/// round trip can't carry it in either direction, and the credential has
+/// exactly one write path. Trimmed; blank is a no-op (removal is
+/// `linear_clear_api_key`'s job), so an empty submit can't wipe a stored key.
+#[tauri::command]
+pub async fn linear_set_api_key(key: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if key.trim().is_empty() {
+            return Ok(());
+        }
+        settings::set_linear_api_key(&key)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .str_err()
+}
+
 /// Forget the stored Linear API key — the explicit clear behind the Settings
-/// field's "Remove key" button. A blank key saved through `save_settings`
-/// deliberately does *not* clear it (the webview's copy is always blank, so
-/// blank has to mean "unchanged").
+/// field's "Remove key" button.
 #[tauri::command]
 pub async fn linear_clear_api_key() -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(settings::clear_linear_api_key)

@@ -1,6 +1,12 @@
 import clsx from "clsx";
 import { Loader2, Search, Ticket } from "lucide-react";
-import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import {
+  type KeyboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useDialogRef } from "../hooks/useDialogRef";
 import { attachIssueToAgent, LINEAR_KEY_SAVED_EVENT } from "../lib/linear";
 import { invoke } from "../lib/tauri";
@@ -114,6 +120,39 @@ function badgeStyle(color: string) {
     borderColor: fill,
     color: readableOn(fill),
   };
+}
+
+/** One badge in the picker's row: a project chip or a status chip. The color is
+ * whichever Linear reported for that field (validated here, since a payload we
+ * didn't expect must not reach an inline style); `null` degrades to the neutral
+ * bordered chip. `data-linear-badge` marks the element carrying the fill, so a
+ * test can target the box rather than the text inside it. */
+function LinearBadge({
+  label,
+  color,
+  className,
+  title,
+}: {
+  label: string;
+  color: string | null;
+  className?: string;
+  title?: string;
+}) {
+  const hex = hexColor(color);
+  return (
+    <span
+      data-linear-badge={label}
+      className={clsx(
+        BADGE_CLASSES,
+        className,
+        !hex && "border-border text-muted",
+      )}
+      style={hex ? badgeStyle(hex) : undefined}
+      title={title}
+    >
+      <span className="truncate">{label}</span>
+    </span>
+  );
 }
 
 function openSettings(): void {
@@ -296,9 +335,13 @@ export function LinearIssueDialog() {
   // x. One shared width — the longest identifier on screen, in monospace
   // `ch` units — keeps the title column straight without truncating the wide
   // ones. The floor keeps a single short result from collapsing the column.
-  const identifierChars = Math.max(
-    6,
-    ...results.map((issue) => issue.identifier.length),
+  const identifierChars = useMemo(
+    () =>
+      results.reduce(
+        (width, issue) => Math.max(width, issue.identifier.length),
+        6,
+      ),
+    [results],
   );
 
   async function select(summary: LinearIssueSummary): Promise<void> {
@@ -420,8 +463,6 @@ export function LinearIssueDialog() {
             {results.map((issue, i) => {
               const isActive = i === activeIndex;
               const isAttaching = attaching === issue.id;
-              const projectColor = hexColor(issue.project_color);
-              const stateColor = hexColor(issue.state_color);
               return (
                 <li key={issue.id}>
                   <button
@@ -449,19 +490,12 @@ export function LinearIssueDialog() {
                       // a near-black or near-white ink chosen per color so a
                       // light project (amber) and a dark one (indigo) both
                       // stay legible.
-                      <span
-                        className={clsx(
-                          BADGE_CLASSES,
-                          "max-w-[9rem]",
-                          !projectColor && "border-border text-muted",
-                        )}
-                        style={
-                          projectColor ? badgeStyle(projectColor) : undefined
-                        }
-                        title={issue.project}
-                      >
-                        <span className="truncate">{issue.project}</span>
-                      </span>
+                      <LinearBadge
+                        label={issue.project.name}
+                        color={issue.project.color}
+                        className="max-w-[9rem]"
+                        title={issue.project.name}
+                      />
                     )}
                     {isAttaching ? (
                       <Loader2
@@ -473,17 +507,10 @@ export function LinearIssueDialog() {
                         // Same badge as the project, in the workflow state's
                         // color — Linear's own status colors, not a
                         // category-derived palette.
-                        <span
-                          className={clsx(
-                            BADGE_CLASSES,
-                            !stateColor && "border-border text-muted",
-                          )}
-                          style={
-                            stateColor ? badgeStyle(stateColor) : undefined
-                          }
-                        >
-                          {issue.state}
-                        </span>
+                        <LinearBadge
+                          label={issue.state.name}
+                          color={issue.state.color}
+                        />
                       )
                     )}
                   </button>

@@ -260,21 +260,27 @@ export function SettingsForm() {
       opencode_executable_path: opencodeExecutablePath.trim(),
       opencode2_executable_path: opencode2ExecutablePath.trim(),
       pi_executable_path: piExecutablePath.trim(),
-      // Blank means "unchanged": the field is always blank until the user
-      // types, since the webview never receives the stored key. Only a
-      // freshly typed value is sent; removal is `linear_clear_api_key`'s job.
-      linear_api_key: typedLinearKey,
+      // Never set here: the credential doesn't travel with the settings blob
+      // (`#[serde(skip)]` on both sides). A typed key goes through its own
+      // `linear_set_api_key` call below; removal is `linear_clear_api_key`.
+      linear_api_key: "",
       linear_api_key_set: hasStoredLinearKey || typedLinearKey !== "",
     };
     try {
-      if (typedLinearKey) setHasStoredLinearKey(true);
+      // The key first, so a failed write reports before the (unrelated)
+      // settings blob is persisted — and so `linear_api_key_set` only claims
+      // true once the secret really landed.
+      if (typedLinearKey) {
+        await invoke("linear_set_api_key", { key: typedLinearKey });
+        setHasStoredLinearKey(true);
+      }
       useStore.setState({ settings: updated });
       await saveSettings();
       cancelScheduledSettingsSave();
       // A replaced key invalidates any ticket list already on screen.
       if (typedLinearKey) announceLinearKeySaved();
-      // The typed key is now in the backend's own file; don't keep it in
-      // component state (or in the store) any longer than necessary.
+      // The typed key is in the backend's own file; don't keep it in component
+      // state any longer than necessary.
       setLinearApiKey("");
       setError(null);
       setSaveState("saved");

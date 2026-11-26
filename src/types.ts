@@ -229,12 +229,21 @@ export interface Settings {
   browser_enabled: boolean;
   /** Always empty in the webview: the backend never sends the key itself
    * (it lives in its own owner-only file and is read only by the Linear
-   * commands). Blank on save means "unchanged" — clearing is an explicit
-   * `linear_clear_api_key` call, so `SettingsForm` keeps the typed value
-   * locally until it's saved. */
+   * commands). `#[serde(skip)]` on the Rust side means it doesn't travel with
+   * this blob in *either* direction — a new key is set with
+   * `linear_set_api_key` and removed with `linear_clear_api_key`, so nothing
+   * here is ever blank-as-a-signal. */
   linear_api_key: string;
   /** Whether a Linear API key is stored — what the ticket picker gates on. */
   linear_api_key_set: boolean;
+}
+
+/** A named thing Linear gives a color (`WorkflowState`, `Project`). Nesting the
+ * name with its color means a row can't pair one field's name with another's
+ * color. `color` is a hex string, or null when Linear omitted it. */
+export interface LinearNamedColor {
+  name: string;
+  color: string | null;
 }
 
 /** One row in the Linear ticket picker. */
@@ -243,14 +252,11 @@ export interface LinearIssueSummary {
   identifier: string;
   title: string;
   url: string;
-  state: string | null;
+  /** Workflow state (e.g. "In Progress"), when Linear returned one. */
+  state: LinearNamedColor | null;
   team: string | null;
-  /** Project name; null for issues that aren't in a project. */
-  project: string | null;
-  /** The status's hex color (`#5E6AD2`), for the row's status badge. */
-  state_color: string | null;
-  /** The project's hex color, for the project badge. */
-  project_color: string | null;
+  /** The issue's project; null for issues that aren't in a project. */
+  project: LinearNamedColor | null;
 }
 
 /** A full Linear ticket, including the description attached to the agent. */
@@ -260,11 +266,9 @@ export interface LinearIssue {
   title: string;
   description: string | null;
   url: string;
-  state: string | null;
+  state: LinearNamedColor | null;
   team: string | null;
-  project: string | null;
-  state_color: string | null;
-  project_color: string | null;
+  project: LinearNamedColor | null;
   assignee: string | null;
   priority: string | null;
   labels: string[];
