@@ -297,6 +297,198 @@ describe("ChangesPane", () => {
     ).toBeInTheDocument();
   });
 
+  it("does not offer discard on a merged worktree", () => {
+    useStore.setState({
+      worktrees: [
+        {
+          ...wt,
+          status: {
+            branch: "feat/hulling",
+            ahead: 0,
+            behind: 0,
+            staged: 0,
+            modified: 0,
+            untracked: 0,
+            added: 3,
+            removed: 1,
+            conflicts: 0,
+            commits_ahead_of_base: 3,
+            merged_into_base: false,
+            conflicts_with_base: true,
+            has_remote: true,
+            last_commit_message: "",
+            last_commit_time: 0,
+            base_added: 3,
+            base_removed: 1,
+          },
+        },
+      ],
+      selectedId: "corral/hulling",
+      prInfoByWtId: new Map([
+        [
+          "corral/hulling",
+          {
+            number: 102,
+            url: "https://example.com/pr/102",
+            state: "merged",
+            is_draft: false,
+          },
+        ],
+      ]),
+      changes: {
+        base: "main",
+        files: [
+          {
+            path: "src/main.rs",
+            status: "modified",
+            old_path: null,
+            staged: false,
+            sync_state: "pushed",
+            dirty: false,
+            added: 3,
+            removed: 1,
+          },
+        ],
+      },
+    });
+    render(<ChangesPane />);
+    // The work has landed: discarding a local edit could only lose work, and
+    // copying/diffing stay available.
+    expect(
+      screen.queryByTitle("Discard changes: src/main.rs"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTitle("Copy path: src/main.rs")).toBeInTheDocument();
+  });
+
+  it("still offers discard when a merged PR has post-merge edits", () => {
+    // A dirty tree vetoes "merged", so the pane isn't read-only: those edits
+    // aren't in the branch (or the merged PR), and Discard is the only way to
+    // get rid of them.
+    useStore.setState({
+      worktrees: [
+        {
+          ...wt,
+          status: {
+            branch: "feat/hulling",
+            ahead: 0,
+            behind: 0,
+            staged: 0,
+            modified: 1,
+            untracked: 0,
+            added: 3,
+            removed: 1,
+            conflicts: 0,
+            commits_ahead_of_base: 3,
+            merged_into_base: false,
+            conflicts_with_base: false,
+            has_remote: true,
+            last_commit_message: "",
+            last_commit_time: 0,
+            base_added: 3,
+            base_removed: 1,
+          },
+        },
+      ],
+      selectedId: "corral/hulling",
+      prInfoByWtId: new Map([
+        [
+          "corral/hulling",
+          {
+            number: 102,
+            url: "https://example.com/pr/102",
+            state: "merged",
+            is_draft: false,
+          },
+        ],
+      ]),
+      changes: {
+        base: "main",
+        files: [
+          {
+            path: "src/main.rs",
+            status: "modified",
+            old_path: null,
+            staged: false,
+            sync_state: "pushed",
+            dirty: true,
+            added: 3,
+            removed: 1,
+          },
+        ],
+      },
+    });
+    render(<ChangesPane />);
+    expect(
+      screen.getByTitle("Discard changes: src/main.rs"),
+    ).toBeInTheDocument();
+  });
+
+  it("closes an open discard prompt when the branch becomes merged", () => {
+    useStore.setState({
+      worktrees: [
+        {
+          ...wt,
+          status: {
+            branch: "feat/hulling",
+            ahead: 0,
+            behind: 0,
+            staged: 0,
+            modified: 0,
+            untracked: 0,
+            added: 3,
+            removed: 1,
+            conflicts: 0,
+            commits_ahead_of_base: 3,
+            merged_into_base: false,
+            conflicts_with_base: false,
+            has_remote: true,
+            last_commit_message: "",
+            last_commit_time: 0,
+            base_added: 3,
+            base_removed: 1,
+          },
+        },
+      ],
+      selectedId: "corral/hulling",
+      changes: {
+        base: "main",
+        files: [
+          {
+            path: "src/main.rs",
+            status: "modified",
+            old_path: null,
+            staged: false,
+            sync_state: "pushed",
+            dirty: true,
+            added: 3,
+            removed: 1,
+          },
+        ],
+      },
+    });
+    render(<ChangesPane />);
+    fireEvent.click(screen.getByTitle("Discard changes: src/main.rs"));
+    expect(screen.getByText("Discard changes?")).toBeInTheDocument();
+
+    act(() =>
+      useStore.setState({
+        prInfoByWtId: new Map([
+          [
+            "corral/hulling",
+            {
+              number: 102,
+              url: "https://example.com/pr/102",
+              state: "merged",
+              is_draft: false,
+            },
+          ],
+        ]),
+      }),
+    );
+
+    expect(screen.queryByText("Discard changes?")).not.toBeInTheDocument();
+  });
+
   it("summarizes total added/removed lines across all files", () => {
     useStore.setState({
       worktrees: [wt],

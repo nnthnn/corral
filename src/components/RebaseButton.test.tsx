@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as worktrees from "../lib/worktrees";
 import { useStore } from "../store";
-import type { GitStatus, Worktree } from "../types";
+import type { GitStatus, PrInfo, Worktree } from "../types";
 import { RebaseButton, rebaseButtonState } from "./RebaseButton";
 
 vi.mock("../lib/worktrees", async () => {
@@ -74,6 +74,50 @@ describe("rebaseButtonState", () => {
       kind: "rebase",
     });
   });
+
+  it("is hidden once the branch is merged, even while it still conflicts", () => {
+    // The merged check lives inside `rebaseButtonState`, so callers that don't
+    // thread `prInfo`/`justMerged` through still get it for a squash merge the
+    // local ancestry check can see.
+    expect(
+      rebaseButtonState(
+        wtWith({ conflicts_with_base: true, merged_into_base: true }),
+      ),
+    ).toEqual({ kind: "hidden" });
+    // …and with the caller's live PR/justMerged, for a squash merge it can't.
+    expect(
+      rebaseButtonState(
+        wtWith({ conflicts_with_base: true, has_remote: true }),
+        {
+          number: 1,
+          url: "https://github.com/x/y/pull/1",
+          state: "merged",
+          is_draft: false,
+        },
+        false,
+      ),
+    ).toEqual({ kind: "hidden" });
+    expect(
+      rebaseButtonState(wtWith({ conflicts_with_base: true }), null, true),
+    ).toEqual({ kind: "hidden" });
+  });
+
+  it("keeps offering a rebase when a merged PR has post-merge edits", () => {
+    // Dirty vetoes "merged" (same rule as `isMergeComplete`), so the fix for
+    // "work landed after the merge is still work" reaches this button too.
+    expect(
+      rebaseButtonState(
+        wtWith({ conflicts_with_base: true, has_remote: true, modified: 1 }),
+        {
+          number: 1,
+          url: "https://github.com/x/y/pull/1",
+          state: "merged",
+          is_draft: false,
+        },
+        false,
+      ),
+    ).toEqual({ kind: "note", text: "Uncommitted changes" });
+  });
 });
 
 describe("RebaseButton", () => {
@@ -117,5 +161,54 @@ describe("RebaseButton", () => {
       />,
     );
     expect(screen.getByText("Rebase")).toBeDisabled();
+  });
+
+  it("hides the button when a squash-merged PR is known, even though the branch still conflicts", () => {
+    const prInfo: PrInfo = {
+      number: 12,
+      url: "https://github.com/o/r/pull/12",
+      state: "merged",
+      is_draft: false,
+    };
+    useStore.setState({ prInfoByWtId: new Map([["p/f", prInfo]]) });
+    render(
+      <RebaseButton
+        wt={wtWith({
+          conflicts_with_base: true,
+          commits_ahead_of_base: 3,
+          has_remote: true,
+        })}
+        mode="chat"
+        base="main"
+      />,
+    );
+    expect(screen.queryByText("Rebase")).not.toBeInTheDocument();
+  });
+
+  it("still offers a rebase while the PR is open", () => {
+    const prInfo: PrInfo = {
+      number: 12,
+      url: "https://github.com/o/r/pull/12",
+      state: "open",
+      is_draft: false,
+    };
+    useStore.setState({ prInfoByWtId: new Map([["p/f", prInfo]]) });
+    render(
+      <RebaseButton
+        wt={wtWith({ conflicts_with_base: true, has_remote: true })}
+        mode="chat"
+        base="main"
+      />,
+    );
+    expect(screen.getByText("Rebase")).toBeInTheDocument();
+  });
+
+  it("hides the button when local ancestry says the branch is merged", () => {
+    render(
+      <RebaseButton
+        wt={wtWith({ conflicts_with_base: true, merged_into_base: true })}
+      />,
+    );
+    expect(screen.queryByText("Rebase")).not.toBeInTheDocument();
   });
 });

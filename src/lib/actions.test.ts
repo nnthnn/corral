@@ -313,6 +313,55 @@ describe("removeWorktree", () => {
     }
   });
 
+  it("sweeps every other id-keyed cache, so a reused project/feature starts clean", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce(undefined);
+    const state = (running: boolean) => ({
+      output: [],
+      running,
+      exit_code: null,
+    });
+    useStore.setState({
+      deleteTarget: wt,
+      checksByWtId: new Map([["corral/hulling", []]]),
+      provisioning: new Map([["corral/hulling", state(false)]]),
+      run: new Map([["corral/hulling", state(true)]]),
+      rebasingIds: new Set(["corral/hulling"]),
+      startingIds: new Set(["corral/hulling"]),
+      mergingPrIds: new Set(["corral/hulling"]),
+      markingPrReadyIds: new Set(["corral/hulling"]),
+      notifiedWaiting: new Set(["corral/hulling"]),
+      acknowledgedWaiting: new Set(["corral/hulling"]),
+      fileTree: new Map([
+        ["corral/hulling:", []],
+        ["corral/hulling:src", []],
+        ["corral/other:", []],
+      ]),
+      expandedDirs: new Set(["corral/hulling:", "corral/other:"]),
+    });
+    vi.useFakeTimers();
+    try {
+      const promise = removeWorktree(wt, true);
+      await vi.advanceTimersByTimeAsync(200);
+      await promise;
+      const after = useStore.getState();
+      expect(after.checksByWtId.has("corral/hulling")).toBe(false);
+      expect(after.provisioning.has("corral/hulling")).toBe(false);
+      expect(after.run.has("corral/hulling")).toBe(false);
+      expect(after.rebasingIds.has("corral/hulling")).toBe(false);
+      expect(after.startingIds.has("corral/hulling")).toBe(false);
+      expect(after.mergingPrIds.has("corral/hulling")).toBe(false);
+      expect(after.markingPrReadyIds.has("corral/hulling")).toBe(false);
+      expect(after.notifiedWaiting.has("corral/hulling")).toBe(false);
+      expect(after.acknowledgedWaiting.has("corral/hulling")).toBe(false);
+      // The Files tree is keyed `<wtId>:<path>`, so it needs a prefix sweep —
+      // and the other worktree's entries must survive it.
+      expect([...after.fileTree.keys()]).toEqual(["corral/other:"]);
+      expect([...after.expandedDirs]).toEqual(["corral/other:"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("auto-selects the adjacent worktree and flashes the main pane when the removed one was selected", async () => {
     vi.mocked(invoke).mockResolvedValueOnce(undefined);
     const other: Worktree = { ...wt, feature: "churning" };

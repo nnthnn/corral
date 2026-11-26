@@ -358,8 +358,15 @@ export function fetchPrStatus(
   return invoke("pr_status", { project: wt.project, feature: wt.feature })
     .then((info: PrInfo | null) => {
       const prInfoByWtId = new Map(useStore.getState().prInfoByWtId);
-      prInfoByWtId.set(id, info);
-      useStore.setState({ prInfoByWtId });
+      // Only record a *live* result for a worktree that still exists: a
+      // removal sweeps this cache (`removeWorktree`'s `finishRowExit`), and a
+      // fetch still in flight for the removed id would otherwise write its
+      // entry straight back — where a worktree later reusing this same
+      // `project/feature` would inherit it.
+      if (useStore.getState().worktrees.some((w) => wtId(w) === id)) {
+        prInfoByWtId.set(id, info);
+        useStore.setState({ prInfoByWtId });
+      }
       return info;
     })
     .catch((err) => {

@@ -73,6 +73,78 @@ describe("WorktreeHoverCard", () => {
     expect(screen.getByText("my-feature")).toBeInTheDocument();
   });
 
+  it("hides the base-conflict warning once the worktree is merged", () => {
+    const props = {
+      wt: wt({
+        status: status({ conflicts_with_base: true, has_remote: true }),
+      }),
+      anchorRect,
+      onMouseEnter: vi.fn(),
+      onMouseLeave: vi.fn(),
+    };
+    const warning = /Would conflict with the base branch/;
+    const { rerender } = render(
+      <WorktreeHoverCard {...props} status="committed" />,
+    );
+    expect(screen.getByText(warning)).toBeInTheDocument();
+
+    // A merged squash-merged PR can still "conflict" with the base it landed
+    // in; by then the only action left is Remove, so the advice is noise.
+    useStore.setState({
+      prInfoByWtId: new Map([
+        [
+          "corral/churning",
+          {
+            number: 1,
+            url: "https://github.com/x/y/pull/1",
+            state: "merged",
+            is_draft: false,
+          },
+        ],
+      ]),
+    });
+    rerender(<WorktreeHoverCard {...props} status="merged" />);
+    expect(screen.queryByText(warning)).not.toBeInTheDocument();
+  });
+
+  it("keeps the warning when a merged PR has post-merge edits", () => {
+    // The card uses the same `isMergeComplete` every other surface does, so a
+    // dirty tree vetoes "merged" here too — the advice is still actionable.
+    const store = useStore.getInitialState();
+    useStore.setState({
+      ...store,
+      prInfoByWtId: new Map([
+        [
+          "corral/churning",
+          {
+            number: 1,
+            url: "https://github.com/x/y/pull/1",
+            state: "merged",
+            is_draft: false,
+          },
+        ],
+      ]),
+    });
+    render(
+      <WorktreeHoverCard
+        wt={wt({
+          status: status({
+            conflicts_with_base: true,
+            has_remote: true,
+            modified: 1,
+          }),
+        })}
+        status="in-progress"
+        anchorRect={anchorRect}
+        onMouseEnter={vi.fn()}
+        onMouseLeave={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText(/Would conflict with the base branch/),
+    ).toBeInTheDocument();
+  });
+
   it("shows branch-vs-base diff totals in the header", () => {
     render(
       <WorktreeHoverCard

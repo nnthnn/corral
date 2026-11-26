@@ -421,6 +421,11 @@ describe("rebaseWorktree", () => {
 });
 
 describe("fetchPrStatus", () => {
+  beforeEach(() => {
+    // The live fetch only records a result for a worktree that still exists.
+    useStore.setState({ worktrees: [wt] });
+  });
+
   it("stores the fetched PrInfo keyed by wtId", async () => {
     vi.mocked(invoke).mockResolvedValueOnce({
       number: 7,
@@ -445,6 +450,28 @@ describe("fetchPrStatus", () => {
     await vi.waitFor(() =>
       expect(useStore.getState().prInfoByWtId.get("corral/hulling")).toBeNull(),
     );
+  });
+
+  it("drops a result for a worktree removed while the fetch was in flight", async () => {
+    // `removeWorktree` sweeps `prInfoByWtId` so a reused project/feature
+    // starts clean; a fetch that resolves afterwards must not put the entry
+    // back (and the backend's `pr_status` can take seconds on a slow `gh`).
+    let resolveFetch: (info: unknown) => void = () => {};
+    vi.mocked(invoke).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFetch = resolve;
+      }),
+    );
+    const pending = fetchPrStatus(wt);
+    useStore.setState({ worktrees: [] });
+    resolveFetch({
+      number: 7,
+      url: "https://github.com/x/y/pull/7",
+      state: "merged",
+      is_draft: false,
+    });
+    await pending;
+    expect(useStore.getState().prInfoByWtId.has("corral/hulling")).toBe(false);
   });
 
   it("does not show an error toast when the fetch fails — this runs automatically, not from a user action", async () => {

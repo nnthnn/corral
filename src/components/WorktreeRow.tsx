@@ -7,6 +7,8 @@ import { sessionStatus, useStore, wantsAttention } from "../store";
 import type { ChecksSummary, Worktree } from "../types";
 import {
   deriveLifecycleState,
+  isMergeComplete,
+  resolvePrInfo,
   rightSlotIndicator,
   worktreeTitle,
   wtId,
@@ -39,16 +41,12 @@ export function WorktreeRow({
   const id = wtId(wt);
   const storedPrInfo = useStore((s) => s.prInfoByWtId);
   const justMerged = useStore((s) => s.justMergedIds.has(id));
-  // Prefer the live per-worktree fetch (`prInfoByWtId`, populated when this
-  // worktree is/was selected) over the coarser 5-minute background poll's
-  // `wt.pr_state` — but only when the live fetch has actually run for this
-  // id (`.has`, not a falsy check: a confirmed "no PR" is stored as an
-  // explicit `null`, which must not fall through to possibly-stale poll
-  // data via `??`).
-  const prInfo = storedPrInfo.has(id)
-    ? (storedPrInfo.get(id) ?? null)
-    : (wt.pr_state ?? null);
+  // Prefer the live per-worktree fetch over the coarse 5-minute background
+  // poll's `wt.pr_state` — see `resolvePrInfo`, which every "is this merged?"
+  // surface shares so they can't disagree about which value wins.
+  const prInfo = resolvePrInfo(wt, storedPrInfo);
   const status = deriveLifecycleState(wt.status, prInfo, justMerged);
+  const mergeComplete = isMergeComplete(wt.status, prInfo, justMerged);
   const working = useStore((s) => sessionStatus(s, id)?.cls === "working");
   const attention = useStore((s) => wantsAttention(s, id));
   const running = useStore((s) => s.run.get(id)?.running ?? false);
@@ -62,7 +60,13 @@ export function WorktreeRow({
     : (wt.pr_checks ?? null);
   const unread = useStore((s) => s.unreadOutput.has(id) && id !== s.selectedId);
   const removing = useStore((s) => s.removingIds.has(id));
-  const indicator = rightSlotIndicator(wt.status, attention, running, checks);
+  const indicator = rightSlotIndicator(
+    wt.status,
+    attention,
+    running,
+    checks,
+    mergeComplete,
+  );
   const rowRef = useRef<HTMLDivElement>(null);
   const anchorRectRef = useRef<DOMRect | null>(null);
   const hover = useHoverIntent();

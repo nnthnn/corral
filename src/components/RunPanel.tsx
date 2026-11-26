@@ -109,7 +109,14 @@ export function RunPanel({ wt }: { wt: Worktree }) {
       });
     if (commandByWtId.has(id)) return;
     invoke("resolve_run_command", { project: wt.project, feature: wt.feature })
-      .then((resolved) => setCommand(resolved))
+      .then((resolved) => {
+        // Detection is a prompt *suggestion*, so only fill a field the user
+        // hasn't typed into while it was in flight — otherwise a slow resolve
+        // (git + manifest sniffing) overwrites the first few keystrokes.
+        setCommandByWtId((prev) =>
+          prev.get(id) ? prev : new Map(prev).set(id, resolved),
+        );
+      })
       .catch((err) => showError(`Couldn't resolve a run command: ${err}`));
   }, [id, wt.project, wt.feature]);
 

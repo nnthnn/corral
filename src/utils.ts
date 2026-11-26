@@ -116,6 +116,51 @@ export function isFullyMerged(
   return deriveLifecycleState(status, prInfo, justMerged) === "merged";
 }
 
+/** The PR state a worktree row should show: the live per-worktree fetch
+ * (`prInfoByWtId`, populated when the worktree is/was selected) when it has
+ * actually run for this id — `.has`, not a falsy check, so a confirmed "no PR"
+ * (stored as an explicit `null`) doesn't fall through to possibly-stale poll
+ * data — otherwise the coarse 5-minute background poll's `wt.pr_state`.
+ *
+ * Every surface that asks "is this merged?" (`WorktreeRow`'s dot,
+ * `isMergeComplete` behind the merge/rebase buttons and the read-only Changes
+ * pane) must go through this same value, or a row that's never been selected
+ * this app-run disagrees with the ones that have. */
+export function resolvePrInfo(
+  wt: Worktree,
+  prInfoByWtId: Map<string, PrInfo | null>,
+): PrInfo | null {
+  const id = wtId(wt);
+  return prInfoByWtId.has(id)
+    ? (prInfoByWtId.get(id) ?? null)
+    : (wt.pr_state ?? null);
+}
+
+/** "Merged" as the merge/rebase action buttons, the read-only Changes pane,
+ * and the sidebar row mean it — the single merged predicate every surface
+ * shares, so the dot, the header buttons, and the hover card can't disagree.
+ *
+ * GitHub's PR state is authoritative whenever there's a remote: a squash
+ * merge rewrites the commit, so the local branch is *not* an ancestor of base
+ * and `merged_into_base`/`conflicts_with_base` keep describing a divergence
+ * that's already been resolved upstream. Without a remote, fall back to
+ * `isFullyMerged`'s local rules.
+ *
+ * Either way a dirty tree vetoes "merged" — work landed *after* the merge is
+ * still work, and it isn't in the branch (or the merged PR), so treating it as
+ * done would hide the only affordance that can discard it. */
+export function isMergeComplete(
+  status: GitStatus | null,
+  prInfo: PrInfo | null,
+  justMerged: boolean,
+): boolean {
+  if (!status) return false;
+  if (status.staged + status.modified + status.untracked > 0) return false;
+  return status.has_remote
+    ? prInfo?.state === "merged"
+    : isFullyMerged(status, prInfo, justMerged);
+}
+
 /** Entity-encodes `& < > " '` — a small self-contained escape so this module
  * stays DOM-free (unlike `ui/templates.ts`'s `html` tag, it can run under
  * plain Node in tests, no jsdom required). */
@@ -337,13 +382,25 @@ export function rightSlotIndicator(
   attention: boolean,
   running = false,
   checks?: ChecksSummary | null,
+  /** `isMergeComplete(...)` — the same predicate the merge/rebase buttons and
+   * the Changes pane use. */
+  mergeComplete = false,
 ): RightSlotIndicator {
   if (running) return { kind: "running" };
   if (attention) return { kind: "attention" };
-  if (checks && checks.failed > 0) return { kind: "checks-failed" };
+  // Once a branch is merged the worktree is just waiting to be removed, so its
+  // CI results and base-divergence advice are both stale — a squash merge
+  // leaves the branch "conflicting" with the base it already landed in. Keep
+  // the session signals above (an agent can still be running) but don't light
+  // the row up with either.
+  if (!mergeComplete && checks && checks.failed > 0) {
+    return { kind: "checks-failed" };
+  }
   if (!status) return { kind: "none" };
-  if (status.conflicts_with_base) return { kind: "conflict" };
-  if (checks && checks.pending > 0) return { kind: "checks-running" };
+  if (!mergeComplete) {
+    if (status.conflicts_with_base) return { kind: "conflict" };
+    if (checks && checks.pending > 0) return { kind: "checks-running" };
+  }
   const dirty = status.staged + status.modified + status.untracked;
   if (dirty > 0 && (status.added > 0 || status.removed > 0)) {
     return { kind: "diff", added: status.added, removed: status.removed };

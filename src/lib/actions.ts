@@ -109,34 +109,75 @@ export async function removeWorktree(
   showSuccess("Cleared out.");
 }
 
+/** Drops `key` from `map`, returning the *same* map when it's already absent
+ * so a removal doesn't churn every subscriber for an unchanged map. */
+function withoutKey<K, V>(map: Map<K, V>, key: K): Map<K, V> {
+  if (!map.has(key)) return map;
+  const next = new Map(map);
+  next.delete(key);
+  return next;
+}
+
+function withoutMember<T>(set: Set<T>, value: T): Set<T> {
+  if (!set.has(value)) return set;
+  const next = new Set(set);
+  next.delete(value);
+  return next;
+}
+
+/** Same as [`withoutKey`] for the maps/sets keyed `<wtId>:<relativePath>`
+ * (the Files tree's directory cache and expansion set). */
+function withoutKeyPrefix<V>(
+  map: Map<string, V>,
+  prefix: string,
+): Map<string, V> {
+  let next: Map<string, V> | null = null;
+  for (const key of map.keys()) {
+    if (!key.startsWith(prefix)) continue;
+    next ??= new Map(map);
+    next.delete(key);
+  }
+  return next ?? map;
+}
+
+function withoutMemberPrefix(set: Set<string>, prefix: string): Set<string> {
+  let next: Set<string> | null = null;
+  for (const value of set) {
+    if (!value.startsWith(prefix)) continue;
+    next ??= new Set(set);
+    next.delete(value);
+  }
+  return next ?? set;
+}
+
 function finishRowExit(id: string): void {
   const s = useStore.getState();
   s.sessionMgr?.closeTerminal(id);
-  const sessions = new Map(s.sessions);
-  sessions.delete(id);
-  const unreadOutput = new Set(s.unreadOutput);
-  unreadOutput.delete(id);
-  const justMergedIds = new Set(s.justMergedIds);
-  justMergedIds.delete(id);
-  const mergingIds = new Set(s.mergingIds);
-  mergingIds.delete(id);
-  const preparingPr = new Map(s.preparingPr);
-  preparingPr.delete(id);
-  // PR state is fetched per worktree and cached by `wtId`; a future worktree
-  // reusing this `project/feature` would otherwise render this one's stale PR
-  // badge/checks until refetched.
-  const prInfoByWtId = new Map(s.prInfoByWtId);
-  prInfoByWtId.delete(id);
-  const prDetailsByWtId = new Map(s.prDetailsByWtId);
-  prDetailsByWtId.delete(id);
+  // Every map/set below is keyed by `<project>/<feature>`, an id a future
+  // worktree can legitimately reuse. Anything left behind then belongs to the
+  // *old* worktree — most visibly a PR tab (tab membership is derived from
+  // `prInfoByWtId`) plus dead checks and Run/Setup output — so sweep the whole
+  // set rather than the handful this used to delete. `removingIds` is
+  // deliberately kept: the sidebar row's exit animation still depends on it.
   useStore.setState({
-    sessions,
-    unreadOutput,
-    justMergedIds,
-    mergingIds,
-    preparingPr,
-    prInfoByWtId,
-    prDetailsByWtId,
+    sessions: withoutKey(s.sessions, id),
+    unreadOutput: withoutMember(s.unreadOutput, id),
+    acknowledgedWaiting: withoutMember(s.acknowledgedWaiting, id),
+    notifiedWaiting: withoutMember(s.notifiedWaiting, id),
+    justMergedIds: withoutMember(s.justMergedIds, id),
+    mergingIds: withoutMember(s.mergingIds, id),
+    startingIds: withoutMember(s.startingIds, id),
+    rebasingIds: withoutMember(s.rebasingIds, id),
+    mergingPrIds: withoutMember(s.mergingPrIds, id),
+    markingPrReadyIds: withoutMember(s.markingPrReadyIds, id),
+    preparingPr: withoutKey(s.preparingPr, id),
+    prInfoByWtId: withoutKey(s.prInfoByWtId, id),
+    checksByWtId: withoutKey(s.checksByWtId, id),
+    prDetailsByWtId: withoutKey(s.prDetailsByWtId, id),
+    provisioning: withoutKey(s.provisioning, id),
+    run: withoutKey(s.run, id),
+    fileTree: withoutKeyPrefix(s.fileTree, `${id}:`),
+    expandedDirs: withoutMemberPrefix(s.expandedDirs, `${id}:`),
   });
 
   if (s.selectedId === id) {
