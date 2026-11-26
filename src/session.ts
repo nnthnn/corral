@@ -446,20 +446,37 @@ export class SessionManager {
 
   /** Make `id`'s terminal the visible one, creating + attaching if needed. */
   async show(id: string) {
-    if (!this.entries.has(id)) {
-      await this.createTerminal(id);
-    }
+    // Flip visibility *before* awaiting the attach below. `createTerminal`
+    // registers its entry synchronously, so a second `show()` in this window
+    // already finds it — but it awaits `attach_session`, and callers don't
+    // await `show()`. Assigning `activeId` after that await let a newer switch
+    // (or a `hideAll()`) race with an older one and leave the wrong terminal
+    // visible with `activeId` pointing somewhere else. Doing it first also
+    // makes `hideAll()` authoritative: both post-await checkpoints bail out
+    // when this id is no longer the active one.
     this.activeId = id;
-    for (const [eid, entry] of this.entries) {
-      entry.container.classList.toggle("hidden", eid !== id);
-    }
+    this.toggleVisibleTerminal(id);
+    if (!this.entries.has(id)) await this.createTerminal(id);
+    if (this.activeId !== id) return;
+    // A terminal created just now starts `hidden` (see `createTerminal`), so
+    // re-apply visibility once it exists.
+    this.toggleVisibleTerminal(id);
     requestAnimationFrame(() => {
+      // The user may have switched (or hidden everything) during this frame.
+      if (this.activeId !== id) return;
       this.fitActive();
       // Don't steal the caret from a note editor, palette, or dialog field —
       // e.g. when `running` flips because the selected agent just exited.
       if (!isForeignTextEntryFocused(this.termsEl))
         this.entries.get(id)?.term.focus();
     });
+  }
+
+  /** Reveal `id`'s pane and hide every other one. */
+  private toggleVisibleTerminal(id: string) {
+    for (const [eid, entry] of this.entries) {
+      entry.container.classList.toggle("hidden", eid !== id);
+    }
   }
 
   /** Hide every terminal (e.g. when a worktree with no agent is selected). */

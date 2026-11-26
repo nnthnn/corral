@@ -699,3 +699,78 @@ describe("SessionManager focus", () => {
     xtermFocus.remove();
   });
 });
+
+describe("SessionManager show() races", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    listeners.clear();
+    attachSession.mockReset();
+    resizeSession.mockClear();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+  });
+
+  /** Attach calls resolve only when the test says so, so overlapping `show()`
+   * calls can be interleaved deterministically. Resolvers are pushed in call
+   * order, i.e. the order the terminals were requested. */
+  function deferredAttach(): Array<() => void> {
+    const resolvers: Array<() => void> = [];
+    attachSession.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(() => resolve({ info: {}, buffer: [] }));
+        }),
+    );
+    return resolvers;
+  }
+
+  function panes(): HTMLElement[] {
+    return Array.from(container.querySelectorAll<HTMLElement>(".term-pane"));
+  }
+
+  it("leaves the newest requested terminal visible when the older attach resolves last", async () => {
+    const resolvers = deferredAttach();
+    const mgr = new SessionManager({ container, fontSize: 13 });
+
+    const first = mgr.show("corral/first");
+    const second = mgr.show("corral/second");
+    // The classic race: the *first* request's attach is the slow one. Before
+    // the fix `activeId` was assigned after the awaited create, so whichever
+    // pane resolved last stayed on screen regardless of selection.
+    resolvers[1]?.();
+    resolvers[0]?.();
+    await Promise.all([first, second]);
+
+    expect(panes()[0]).toHaveClass("hidden");
+    expect(panes()[1]).not.toHaveClass("hidden");
+  });
+
+  it("respects a hideAll() that lands while show() is still attaching", async () => {
+    const resolvers = deferredAttach();
+    const mgr = new SessionManager({ container, fontSize: 13 });
+
+    const showing = mgr.show("corral/first");
+    mgr.hideAll();
+    resolvers[0]?.();
+    await showing;
+
+    expect(panes()[0]).toHaveClass("hidden");
+  });
+
+  it("doesn't create a second terminal when show() repeats during the attach", async () => {
+    // Pins the invariant the race fix relies on: `createTerminal` registers
+    // its entry synchronously, before awaiting `attach_session`, so a repeat
+    // `show()` for the same id finds it instead of building a twin pane.
+    const resolvers = deferredAttach();
+    const mgr = new SessionManager({ container, fontSize: 13 });
+
+    const first = mgr.show("corral/first");
+    const second = mgr.show("corral/first");
+    resolvers[0]?.();
+    await Promise.all([first, second]);
+
+    expect(panes()).toHaveLength(1);
+    expect(panes()[0]).not.toHaveClass("hidden");
+  });
+});
