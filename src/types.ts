@@ -247,6 +247,10 @@ export interface LinearIssueSummary {
   team: string | null;
   /** Project name; null for issues that aren't in a project. */
   project: string | null;
+  /** The status's hex color (`#5E6AD2`), for the row's status dot. */
+  state_color: string | null;
+  /** The project's hex color, for tinting the project chip. */
+  project_color: string | null;
 }
 
 /** A full Linear ticket, including the description attached to the agent. */
@@ -259,6 +263,8 @@ export interface LinearIssue {
   state: string | null;
   team: string | null;
   project: string | null;
+  state_color: string | null;
+  project_color: string | null;
   assignee: string | null;
   priority: string | null;
   labels: string[];

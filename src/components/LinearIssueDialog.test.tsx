@@ -15,6 +15,8 @@ const summary: LinearIssueSummary = {
   state: "In Progress",
   team: "Engineering",
   project: "Q3 Auth",
+  state_color: "#f2c94c",
+  project_color: "#5e6ad2",
 };
 
 const recentSummary: LinearIssueSummary = {
@@ -25,6 +27,8 @@ const recentSummary: LinearIssueSummary = {
   state: "Todo",
   team: "Engineering",
   project: null,
+  state_color: "#e2e2e2",
+  project_color: null,
 };
 
 const issue: LinearIssue = {
@@ -97,6 +101,49 @@ describe("LinearIssueDialog", () => {
     // `recentSummary.project` is null: the row renders without a chip, and no
     // empty element is left behind to shift the row.
     expect(screen.getAllByText(/Q3 Auth/)).toHaveLength(1);
+  });
+
+  it("tints the project chip and status dot with Linear's colors", async () => {
+    mockLinear({ recent: [summary] });
+    openWithKey();
+    render(<LinearIssueDialog />);
+
+    const chip = (await screen.findByText("Q3 Auth")).closest(
+      "[title]",
+    ) as HTMLElement;
+    // Tinted from the project's own color rather than the neutral border.
+    expect(chip.getAttribute("style")).toContain("background-color");
+    const dot = chip.querySelector("[style*='background-color']");
+    expect(dot).not.toBeNull();
+    const stateDot = screen
+      .getByText("In Progress")
+      .querySelector("[style*='background-color']");
+    expect(stateDot).not.toBeNull();
+  });
+
+  it("falls back to the neutral chip when a color isn't hex", async () => {
+    mockLinear({
+      recent: [
+        {
+          ...summary,
+          state_color: "rgb(1, 2, 3)",
+          project_color: "hotpink",
+        },
+      ],
+    });
+    openWithKey();
+    render(<LinearIssueDialog />);
+
+    const chip = (await screen.findByText("Q3 Auth")).closest(
+      "[title]",
+    ) as HTMLElement;
+    expect(chip.getAttribute("style")).toBeNull();
+    expect(chip.querySelector("[style*='background-color']")).toBeNull();
+    expect(
+      screen
+        .getByText("In Progress")
+        .querySelector("[style*='background-color']"),
+    ).toBeNull();
   });
 
   it("replaces the recent list with search results once you type", async () => {

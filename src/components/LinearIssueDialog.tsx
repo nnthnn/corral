@@ -19,6 +19,13 @@ function close(): void {
   useStore.setState({ linearDialogOpen: false });
 }
 
+/** Linear reports colors as `#rrggbb`. Anything else is dropped so a surprise
+ * payload can't put arbitrary CSS into an inline style, and so a missing color
+ * degrades to the neutral chip instead of an unstyled one. */
+function hexColor(color: string | null): string | null {
+  return color && /^#[0-9a-f]{6}$/i.test(color) ? color : null;
+}
+
 function openSettings(): void {
   useStore.setState({ linearDialogOpen: false, settingsOpen: true });
 }
@@ -323,6 +330,8 @@ export function LinearIssueDialog() {
             {results.map((issue, i) => {
               const isActive = i === activeIndex;
               const isAttaching = attaching === issue.id;
+              const projectColor = hexColor(issue.project_color);
+              const stateColor = hexColor(issue.state_color);
               return (
                 <li key={issue.id}>
                   <button
@@ -349,12 +358,31 @@ export function LinearIssueDialog() {
                       // Secondary context, so it stays quiet: a bordered chip
                       // reads on both the plain and the active (surface-2) row,
                       // and `leading-none` keeps a chip-only row from growing
-                      // taller than the ones without one.
+                      // taller than the ones without one. Linear's own project
+                      // color tints the chip but never the label text — the
+                      // palette has colors too dark to read as small type.
                       <span
-                        className="max-w-[9rem] shrink-0 truncate rounded-sm border border-border px-1.5 py-1 text-label leading-none text-muted"
+                        className={clsx(
+                          "flex max-w-[9rem] shrink-0 items-center gap-1.5 rounded-sm border px-1.5 py-1 text-label leading-none",
+                          !projectColor && "border-border text-muted",
+                        )}
+                        style={
+                          projectColor
+                            ? {
+                                borderColor: `${projectColor}59`,
+                                backgroundColor: `${projectColor}1f`,
+                              }
+                            : undefined
+                        }
                         title={issue.project}
                       >
-                        {issue.project}
+                        {projectColor && (
+                          <span
+                            className="size-1.5 shrink-0 rounded-full"
+                            style={{ backgroundColor: projectColor }}
+                          />
+                        )}
+                        <span className="truncate">{issue.project}</span>
                       </span>
                     )}
                     {isAttaching ? (
@@ -364,7 +392,13 @@ export function LinearIssueDialog() {
                       />
                     ) : (
                       issue.state && (
-                        <span className="shrink-0 text-label text-muted">
+                        <span className="flex shrink-0 items-center gap-1.5 text-label text-muted">
+                          {stateColor && (
+                            <span
+                              className="size-1.5 shrink-0 rounded-full"
+                              style={{ backgroundColor: stateColor }}
+                            />
+                          )}
                           {issue.state}
                         </span>
                       )

@@ -30,6 +30,12 @@ pub struct LinearIssueSummary {
     /// Project name, when the issue belongs to one (`None` for issues that
     /// aren't in a project — Linear makes the field optional).
     pub project: Option<String>,
+    /// The status's hex color (`#5E6AD2`), for the row's status dot. Linear
+    /// documents it as a CSS color; parsed as an Option so a payload that
+    /// omits it can't fail the whole list.
+    pub state_color: Option<String>,
+    /// The project's hex color, for tinting the project chip.
+    pub project_color: Option<String>,
 }
 
 /// A full ticket, including its description, ready to be formatted into an
@@ -45,6 +51,8 @@ pub struct LinearIssue {
     pub state: Option<String>,
     pub team: Option<String>,
     pub project: Option<String>,
+    pub state_color: Option<String>,
+    pub project_color: Option<String>,
     pub assignee: Option<String>,
     pub priority: Option<String>,
     pub labels: Vec<String>,
@@ -60,6 +68,8 @@ impl LinearIssue {
             state: self.state.clone(),
             team: self.team.clone(),
             project: self.project.clone(),
+            state_color: self.state_color.clone(),
+            project_color: self.project_color.clone(),
         }
     }
 }
@@ -72,9 +82,9 @@ query CorralSearchIssues($term: String!, $first: Int!) {
       identifier
       title
       url
-      state { name }
+      state { name color }
       team { name }
-      project { name }
+      project { name color }
     }
   }
 }
@@ -92,9 +102,9 @@ query CorralRecentIssues($first: Int!) {
       identifier
       title
       url
-      state { name }
+      state { name color }
       team { name }
-      project { name }
+      project { name color }
     }
   }
 }
@@ -108,9 +118,9 @@ query CorralIssue($id: String!) {
     title
     description
     url
-    state { name }
+    state { name color }
     team { name }
-    project { name }
+    project { name color }
     assignee { name }
     priorityLabel
     labels { nodes { name } }
@@ -167,6 +177,8 @@ fn parse_summary(node: &Value) -> Option<LinearIssueSummary> {
         state: str_at(node, "/state/name"),
         team: str_at(node, "/team/name"),
         project: str_at(node, "/project/name"),
+        state_color: str_at(node, "/state/color"),
+        project_color: str_at(node, "/project/color"),
     })
 }
 
@@ -189,6 +201,8 @@ fn parse_issue(node: &Value) -> Option<LinearIssue> {
         state: str_at(node, "/state/name"),
         team: str_at(node, "/team/name"),
         project: str_at(node, "/project/name"),
+        state_color: str_at(node, "/state/color"),
+        project_color: str_at(node, "/project/color"),
         assignee: str_at(node, "/assignee/name"),
         priority: str_at(node, "/priorityLabel"),
         labels: node
@@ -327,15 +341,17 @@ mod tests {
     #[test]
     fn parses_a_search_summary() {
         let node: Value = serde_json::from_str(
-            r#"{
+            // `r##"` rather than `r#"`: the hex colors contain a `"#`
+            // sequence, which would close a single-hash raw string.
+            r##"{
                 "id": "uuid-1",
                 "identifier": "ENG-123",
                 "title": "Fix login timeout",
                 "url": "https://linear.app/acme/issue/ENG-123",
-                "state": { "name": "In Progress" },
+                "state": { "name": "In Progress", "color": "#f2c94c" },
                 "team": { "name": "Engineering" },
-                "project": { "name": "Q3 Auth" }
-            }"#,
+                "project": { "name": "Q3 Auth", "color": "#5e6ad2" }
+            }"##,
         )
         .unwrap();
         let summary = parse_summary(&node).unwrap();
@@ -343,6 +359,8 @@ mod tests {
         assert_eq!(summary.state.as_deref(), Some("In Progress"));
         assert_eq!(summary.team.as_deref(), Some("Engineering"));
         assert_eq!(summary.project.as_deref(), Some("Q3 Auth"));
+        assert_eq!(summary.state_color.as_deref(), Some("#f2c94c"));
+        assert_eq!(summary.project_color.as_deref(), Some("#5e6ad2"));
     }
 
     #[test]
@@ -362,24 +380,25 @@ mod tests {
         // No `project` in the payload (or a null one) is the normal case:
         // most issues aren't in a project, and it must not fail the parse.
         assert_eq!(rows[0].project, None);
+        assert_eq!(rows[0].project_color, None);
     }
 
     #[test]
     fn parses_a_full_issue() {
         let node: Value = serde_json::from_str(
-            r#"{
+            r##"{
                 "id": "uuid-1",
                 "identifier": "ENG-123",
                 "title": "Fix login timeout",
                 "description": "Sessions expire too early.\n\nRepro steps...",
                 "url": "https://linear.app/acme/issue/ENG-123",
-                "state": { "name": "Todo" },
+                "state": { "name": "Todo", "color": "#e2e2e2" },
                 "team": { "name": "Engineering" },
-                "project": { "name": "Q3 Auth" },
+                "project": { "name": "Q3 Auth", "color": "#5e6ad2" },
                 "assignee": { "name": "Ada" },
                 "priorityLabel": "High",
                 "labels": { "nodes": [{ "name": "bug" }, { "name": "auth" }] }
-            }"#,
+            }"##,
         )
         .unwrap();
         let issue = parse_issue(&node).unwrap();
@@ -387,6 +406,8 @@ mod tests {
         assert_eq!(issue.priority.as_deref(), Some("High"));
         assert_eq!(issue.labels, vec!["bug", "auth"]);
         assert_eq!(issue.project.as_deref(), Some("Q3 Auth"));
+        assert_eq!(issue.state_color.as_deref(), Some("#e2e2e2"));
+        assert_eq!(issue.project_color.as_deref(), Some("#5e6ad2"));
         assert!(issue.description.unwrap().contains("Repro steps"));
     }
 
