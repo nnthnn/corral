@@ -20,10 +20,19 @@ const EVENT_PREFIX: &str = "run";
 /// `provision::Registry` even though both wrap `pty_process::Registry` —
 /// Tauri's `State<T>` extraction is by type, so Setup and Run never share a
 /// process or collide on key.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Registry(pty_process::Registry);
 
 pub type RunState = PtyProcessState;
+
+impl Registry {
+    /// A cheap, independent handle for moving into a `spawn_blocking` body
+    /// (e.g. `remove_project`'s teardown). The clone shares the same process
+    /// table.
+    pub fn handle(&self) -> Self {
+        self.clone()
+    }
+}
 
 /// Kill a still-running Run process (if any) and drop its registry entry —
 /// called from `remove_worktree` alongside `provision::stop_and_remove`, so

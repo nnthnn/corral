@@ -17,20 +17,26 @@ pub async fn get_settings() -> Result<corral_core::settings::Settings, String> {
 }
 
 /// See `get_settings`: the save is a JSON write plus its `.bak`, and
-/// `sync_caffeinate` reloads settings (a second keyring read). Both now run
-/// off the main thread — `sync_caffeinate` only takes locks, reads app state,
-/// and starts/stops the sleep inhibitor, so it's thread-agnostic.
+/// `sync_caffeinate` reloads settings (a second keyring read). Both run inside
+/// one `spawn_blocking` closure rather than one after the other on the async
+/// worker: an `async` command's body *is* a Tokio task, so a blocking call left
+/// in it stalls a runtime worker for its duration, and `sync_caffeinate`'s
+/// keyring read can wait on an unlock prompt. `sync_caffeinate` only takes
+/// locks, reads app state, and starts/stops the sleep inhibitor, so it's
+/// thread-agnostic — see `secret::on_keyring_thread`'s doc comment.
 #[tauri::command]
 pub async fn save_settings(
     app: tauri::AppHandle,
     settings: corral_core::settings::Settings,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || corral_core::settings::save(&settings))
-        .await
-        .map_err(|e| e.to_string())?
-        .str_err()?;
-    super::session::sync_caffeinate(&app);
-    Ok(())
+    tauri::async_runtime::spawn_blocking(move || {
+        corral_core::settings::save(&settings)?;
+        super::session::sync_caffeinate(&app);
+        Ok::<_, corral_core::Error>(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .str_err()
 }
 
 /// Where the Linear API key is actually stored — "your system keychain" or

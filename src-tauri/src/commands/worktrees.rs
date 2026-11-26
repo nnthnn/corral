@@ -196,7 +196,8 @@ pub async fn remove_worktree(
 
 /// `async` + `spawn_blocking` (see `merge_worktree`): renaming moves the
 /// worktree directory on disk and renames its branch, both real `git`/fs work
-/// that would otherwise run inline on the GTK main thread.
+/// that would otherwise run inline on the GTK main thread. The body stays a
+/// single closure because `rename` already returns the new state.
 #[tauri::command]
 pub async fn rename_worktree(
     project: String,

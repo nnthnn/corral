@@ -85,9 +85,9 @@ fn failed_run(
 /// wrap their own instance of this type, so Setup and Run never collide
 /// even though both key by the same worktree id — Tauri's `State<T>`
 /// extraction is by type, so the two newtypes are distinct managed state.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Registry {
-    runs: Mutex<HashMap<String, Arc<Run>>>,
+    runs: Arc<Mutex<HashMap<String, Arc<Run>>>>,
 }
 
 #[derive(Clone, Serialize)]

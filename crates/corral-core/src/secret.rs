@@ -282,31 +282,75 @@ fn file_only() -> bool {
 /// handful of times per command (not in a loop), and a short-lived thread keeps
 /// the "no ambient runtime" guarantee trivially true.
 ///
-/// Returns `None` if the operation panicked (the panic hook has already printed
-/// why), which callers treat exactly like any other store failure — by falling
-/// back to the file, never by propagating a panic onto the IPC thread.
+/// Returns `None` if the operation panicked, or if the thread couldn't even be
+/// spawned. Either is logged as a `warn` before falling back to the file — a
+/// silent downgrade would hand the user a plaintext copy of their key with no
+/// sign anything went wrong, and the file backend is exactly where a write
+/// regression would first show up. Callers still treat `None` as "store
+/// unavailable": by falling back to the file, never by propagating a panic (or
+/// an error) onto the IPC thread.
 fn on_keyring_thread<T, F>(f: F) -> Option<T>
 where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
-    std::thread::spawn(move || {
-        #[cfg(target_os = "linux")]
-        {
-            // Entered for the thread's whole life, so zbus's blocking socket
-            // I/O has a reactor to register with. zbus still drives that work
-            // on its own internal runtime; this one only supplies the context.
-            // (macOS's Keychain and Windows' Credential Manager are direct
-            // syscalls and need no runtime at all.)
-            if let Some(rt) = secret_store::runtime() {
-                let _enter = rt.enter();
-                return f();
-            }
+    let joined = std::thread::Builder::new()
+        .name("corral-keyring".to_string())
+        .spawn(move || {
+            // A panic otherwise only prints to stderr (invisible in a bundled
+            // GUI app), so log it where the fallback decision is made.
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                #[cfg(target_os = "linux")]
+                {
+                    // Entered for the thread's whole life, so zbus's blocking
+                    // socket I/O has a reactor to register with. zbus still
+                    // drives that work on its own internal runtime; this one
+                    // only supplies the context. (macOS's Keychain and
+                    // Windows' Credential Manager are direct syscalls and need
+                    // no runtime at all.)
+                    if let Some(rt) = secret_store::runtime() {
+                        let _enter = rt.enter();
+                        return f();
+                    }
+                }
+                f()
+            }))
+        })
+        .inspect_err(|e| {
+            tracing::warn!(
+                "secret: couldn't start the OS-store thread ({e}); using the file fallback"
+            );
+        })
+        .ok()?;
+    match joined.join() {
+        Ok(Ok(value)) => Some(value),
+        Ok(Err(panic)) => {
+            tracing::warn!(
+                "secret: OS store call panicked ({}); using the file fallback",
+                panic_message(&panic)
+            );
+            None
         }
-        f()
-    })
-    .join()
-    .ok()
+        Err(_) => {
+            // A panic that escaped `catch_unwind`'s reach (e.g. a panic while
+            // unwinding). Practically indistinguishable to the caller.
+            tracing::warn!(
+                "secret: OS store thread panicked unexpectedly; using the file fallback"
+            );
+            None
+        }
+    }
+}
+
+/// Best-effort text from a caught panic payload, for the warn line.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        s
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.as_str()
+    } else {
+        "<non-string panic payload>"
+    }
 }
 
 // The OS-store calls are all "best effort with a logged reason". They return
@@ -547,5 +591,34 @@ pub(crate) mod tests {
         for value in [on_worker, from_pool].into_iter().flatten() {
             assert_eq!(value, None, "a never-set secret must read as unset");
         }
+    }
+
+    #[test]
+    fn on_keyring_thread_passes_a_successful_result_through() {
+        assert_eq!(on_keyring_thread(|| 41 + 1), Some(42));
+    }
+
+    /// A panicking OS-store call must not reach the caller as a panic — it
+    /// becomes `None`, which `set`/`get`/`backend` read as "store unavailable"
+    /// and handle with the file fallback (now with a warn, which is the point:
+    /// a silent downgrade would leave the key in plaintext with no hint).
+    #[test]
+    fn on_keyring_thread_swallows_a_panic_instead_of_propagating_it() {
+        let out = on_keyring_thread::<usize, _>(|| panic!("synthetic keyring panic"));
+        assert_eq!(out, None);
+    }
+
+    /// The panic payload's text makes it into `panic_message` (which the warn
+    /// line prints), for both shapes std's `panic!` produces.
+    #[test]
+    fn panic_message_reads_both_payload_shapes() {
+        let str_payload: Box<dyn std::any::Any + Send> = Box::new("boom");
+        assert_eq!(panic_message(&*str_payload), "boom");
+
+        let string_payload: Box<dyn std::any::Any + Send> = Box::new("boom".to_string());
+        assert_eq!(panic_message(&*string_payload), "boom");
+
+        let other_payload: Box<dyn std::any::Any + Send> = Box::new(7u8);
+        assert_eq!(panic_message(&*other_payload), "<non-string panic payload>");
     }
 }

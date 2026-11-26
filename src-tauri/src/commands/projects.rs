@@ -99,13 +99,17 @@ fn add_project_blocking(path: String) -> Result<String, String> {
 /// and its worktree directories stay exactly where they are; the project
 /// reappears if re-added later via `add_project`.
 ///
-/// `async` + `spawn_blocking` around the two heavy halves, for the reason
+/// `async` + `spawn_blocking` around all three phases, for the reason
 /// `merge_worktree` documents: `worktree::list()` runs a full `git status`
 /// scan for every worktree of every project (the same call `list_worktrees`
 /// was moved off the main thread for), and `unregister` rewrites the registry
-/// and reloads settings, which reads the OS keyring. The teardown between them
-/// only takes locks and signals children, so it stays here rather than taking
-/// the `State` borrows across a `spawn_blocking` boundary they can't cross.
+/// and reloads settings, which reads the OS keyring. The teardown in between
+/// is not free either — the session/note stores are flock-guarded file I/O,
+/// and killing a session waits on child processes — and an `async` command's
+/// body runs on a Tokio worker, so leaving it there would park that worker.
+/// The `State` borrows are the only reason it's split into two closures at
+/// all: they can't cross into the first `spawn_blocking` while the command
+/// still needs them afterwards.
 #[tauri::command]
 pub async fn remove_project(
     app: tauri::AppHandle,
@@ -125,18 +129,29 @@ pub async fn remove_project(
     .await
     .map_err(|e| e.to_string())?
     .str_err()?;
-    for wt in &worktrees {
-        let key = corral_core::agent_session::key(&wt.project, &wt.feature);
-        crate::commands::session::kill_session_best_effort(&app, &session_registry, &key);
-        crate::commands::provision::stop_and_remove(&provision_registry, &key);
-        crate::commands::run::stop_and_remove(&run_registry, &key);
-        if let Err(e) = corral_core::agent_session::remove(&key) {
-            tracing::warn!("remove_project: failed to clear session store entry for {key}: {e}");
+
+    let session_registry = session_registry.handle();
+    let provision_registry = provision_registry.handle();
+    let run_registry = run_registry.handle();
+    tauri::async_runtime::spawn_blocking(move || {
+        for wt in &worktrees {
+            let key = corral_core::agent_session::key(&wt.project, &wt.feature);
+            crate::commands::session::kill_session_best_effort(&app, &session_registry, &key);
+            crate::commands::provision::stop_and_remove(&provision_registry, &key);
+            crate::commands::run::stop_and_remove(&run_registry, &key);
+            if let Err(e) = corral_core::agent_session::remove(&key) {
+                tracing::warn!(
+                    "remove_project: failed to clear session store entry for {key}: {e}"
+                );
+            }
+            if let Err(e) = corral_core::worktree_notes::set(&key, "") {
+                tracing::warn!("remove_project: failed to clear worktree note for {key}: {e}");
+            }
         }
-        if let Err(e) = corral_core::worktree_notes::set(&key, "") {
-            tracing::warn!("remove_project: failed to clear worktree note for {key}: {e}");
-        }
-    }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
     tauri::async_runtime::spawn_blocking(move || {
         corral_core::project_settings::unregister(&project)
     })

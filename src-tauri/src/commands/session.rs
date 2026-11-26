@@ -237,8 +237,16 @@ impl Drop for Session {
 }
 
 /// SessionRegistry of sessions, held as Tauri managed state.
+///
+/// `Arc<Inner>` rather than plain fields so a clone is cheap and independent
+/// of the guard: `remove_project` moves a clone into its `spawn_blocking`
+/// teardown, where a `&mut`-borrowed guard (e.g. `StartGuard`) is the wrong
+/// lifetime to carry. All clones share the same sessions and reservations.
+#[derive(Default, Clone)]
+pub struct SessionRegistry(Arc<RegistryInner>);
+
 #[derive(Default)]
-pub struct SessionRegistry {
+struct RegistryInner {
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     /// Ids currently mid-spawn in [`start_session`], reserved for the
     /// duration of the (slow) PTY spawn so a second concurrent call for the
@@ -249,17 +257,18 @@ pub struct SessionRegistry {
     starting: Mutex<std::collections::HashSet<String>>,
 }
 
-/// Releases a [`SessionRegistry::starting`] reservation when dropped, so it's
+/// Releases a [`SessionRegistry`] `starting` reservation when dropped, so it's
 /// freed on every `start_session` exit path (success, `?`-propagated error,
-/// or early return) without repeating the cleanup at each one.
-struct StartGuard<'a> {
-    registry: &'a SessionRegistry,
+/// or early return) without repeating the cleanup at each one. Holds a clone,
+/// so it doesn't borrow the registry.
+struct StartGuard {
+    registry: SessionRegistry,
     id: String,
 }
 
-impl Drop for StartGuard<'_> {
+impl Drop for StartGuard {
     fn drop(&mut self) {
-        self.registry.starting.lock().remove(&self.id);
+        self.registry.0.starting.lock().remove(&self.id);
     }
 }
 
@@ -293,6 +302,13 @@ impl Drop for KillServerOnDrop {
 }
 
 impl SessionRegistry {
+    /// A cheap, independent handle for moving into a `spawn_blocking` body
+    /// (e.g. `remove_project`'s teardown). The clone shares the same sessions
+    /// and spawn reservations.
+    pub fn handle(&self) -> Self {
+        self.clone()
+    }
+
     /// Update a session's waiting status (and, optionally, its last-turn
     /// summary) by id, returning its fresh `SessionInfo` for the caller to
     /// broadcast — or `None` if no such session is registered (e.g. a stale
@@ -303,7 +319,7 @@ impl SessionRegistry {
         waiting: bool,
         summary: Option<String>,
     ) -> Option<SessionInfo> {
-        let sessions = self.sessions.lock();
+        let sessions = self.0.sessions.lock();
         sessions.get(id).map(|s| s.apply_hook(waiting, summary))
     }
 
@@ -314,7 +330,7 @@ impl SessionRegistry {
     /// returned list; returns the ids of sessions actually stopped, for
     /// logging.
     pub fn sweep_idle(&self, timeout: Duration) -> Vec<String> {
-        let sessions = self.sessions.lock();
+        let sessions = self.0.sessions.lock();
         sessions
             .iter()
             .filter(|(_, session)| {
@@ -482,6 +498,7 @@ fn new_opencode2_token(id: &str) -> String {
 pub fn list_sessions(app: AppHandle, registry: State<SessionRegistry>) -> Vec<SessionInfo> {
     prune_stale_exited_sessions(&app, &registry, STALE_EXITED_RETENTION);
     registry
+        .0
         .sessions
         .lock()
         .values()
@@ -500,7 +517,7 @@ pub fn list_sessions(app: AppHandle, registry: State<SessionRegistry>) -> Vec<Se
 /// to the main thread), and holding a lock across that is how deadlocks start.
 fn prune_stale_exited_sessions(app: &AppHandle, registry: &SessionRegistry, retention: Duration) {
     let pruned: Vec<String> = {
-        let mut sessions = registry.sessions.lock();
+        let mut sessions = registry.0.sessions.lock();
         let mut pruned = Vec::new();
         sessions.retain(|id, session| {
             let stale = is_stale_exited(session.inner.lock().exited_at, retention);
@@ -554,7 +571,7 @@ fn scrollback_bytes(kb: u32) -> usize {
 /// mid-task, not while an agent is parked at its prompt.
 pub(crate) fn sync_caffeinate(app: &AppHandle) {
     let registry = app.state::<SessionRegistry>();
-    let any_busy = registry.sessions.lock().values().any(|s| {
+    let any_busy = registry.0.sessions.lock().values().any(|s| {
         let inner = s.inner.lock();
         inner.running && !inner.waiting
     });
@@ -586,7 +603,7 @@ pub async fn start_session(
     let id = corral_core::agent_session::key(&project, &feature);
 
     // Reuse an existing live session for this worktree.
-    if let Some(existing) = registry.sessions.lock().get(&id)
+    if let Some(existing) = registry.0.sessions.lock().get(&id)
         && existing.inner.lock().running
     {
         return Ok(existing.info());
@@ -596,11 +613,11 @@ pub async fn start_session(
     // `start_session` for the same worktree can't race past the check above
     // and spawn a second real `claude` process while this one is still
     // spawning. Released automatically (success or error) when `_guard` drops.
-    if !registry.starting.lock().insert(id.clone()) {
+    if !registry.0.starting.lock().insert(id.clone()) {
         return Err(format!("session for {id} is already starting"));
     }
     let _guard = StartGuard {
-        registry: &registry,
+        registry: (*registry).clone(),
         id: id.clone(),
     };
 
@@ -1191,7 +1208,11 @@ pub async fn start_session(
         resumed,
     });
 
-    registry.sessions.lock().insert(id.clone(), session.clone());
+    registry
+        .0
+        .sessions
+        .lock()
+        .insert(id.clone(), session.clone());
     sync_caffeinate(&app);
 
     tracing::info!(
@@ -1332,7 +1353,7 @@ fn spawn_reader(app: AppHandle, session: Arc<Session>, mut reader: Box<dyn Read 
 
 #[tauri::command]
 pub fn attach_session(registry: State<SessionRegistry>, id: String) -> Result<Attach, String> {
-    let sessions = registry.sessions.lock();
+    let sessions = registry.0.sessions.lock();
     let s = sessions.get(&id).ok_or("session not found")?;
     let info = s.info();
     let buffer = s.inner.lock().buffer.clone();
@@ -1346,7 +1367,7 @@ pub fn write_session(
     id: String,
     data: String,
 ) -> Result<(), String> {
-    let sessions = registry.sessions.lock();
+    let sessions = registry.0.sessions.lock();
     let s = sessions.get(&id).ok_or("session not found")?;
     let mut writer = s.writer.lock();
     writer.write_all(data.as_bytes()).str_err()?;
@@ -1361,7 +1382,7 @@ pub fn resize_session(
     rows: u16,
     cols: u16,
 ) -> Result<(), String> {
-    let sessions = registry.sessions.lock();
+    let sessions = registry.0.sessions.lock();
     let s = sessions.get(&id).ok_or("session not found")?;
     s.master
         .lock()
@@ -1377,7 +1398,7 @@ pub fn resize_session(
 
 #[tauri::command]
 pub fn kill_session(registry: State<SessionRegistry>, id: String) -> Result<(), String> {
-    let sessions = registry.sessions.lock();
+    let sessions = registry.0.sessions.lock();
     let s = sessions.get(&id).ok_or("session not found")?;
     s.kill().str_err()
 }
@@ -1398,13 +1419,22 @@ pub fn kill_session(registry: State<SessionRegistry>, id: String) -> Result<(), 
 /// the session it belongs to.
 pub(crate) fn kill_session_best_effort(app: &AppHandle, registry: &SessionRegistry, id: &str) {
     kill_session_best_effort_session(registry, id);
-    crate::browser_host::shutdown(app, id);
+    // Runs from an async command's `spawn_blocking` body too, so it can't use
+    // the `&AppHandle` overload: closing the browser window is a window
+    // operation, which the backend requires on the main thread.
+    if let Err(e) = app.run_on_main_thread({
+        let app = app.clone();
+        let id = id.to_string();
+        move || crate::browser_host::shutdown(&app, &id)
+    }) {
+        tracing::warn!("kill_session_best_effort: failed to queue browser teardown for {id}: {e}");
+    }
 }
 
 /// The registry/process half of [`kill_session_best_effort`], split out so the
 /// unit tests can drive it without an `AppHandle`.
 fn kill_session_best_effort_session(registry: &SessionRegistry, id: &str) {
-    let session = registry.sessions.lock().remove(id);
+    let session = registry.0.sessions.lock().remove(id);
     if let Some(s) = session
         && let Err(e) = s.kill()
     {
@@ -1419,7 +1449,7 @@ pub fn close_session(
     registry: State<SessionRegistry>,
     id: String,
 ) -> Result<(), String> {
-    registry.sessions.lock().remove(&id);
+    registry.0.sessions.lock().remove(&id);
     crate::browser_host::shutdown(&app, &id);
     Ok(())
 }
@@ -1703,6 +1733,7 @@ mod tests {
         let registry = SessionRegistry::default();
         let session = Arc::new(spawn_test_session("sleep 30"));
         registry
+            .0
             .sessions
             .lock()
             .insert("proj/feat".to_string(), session.clone());
@@ -1711,7 +1742,7 @@ mod tests {
 
         assert!(session.inner.lock().killed);
         assert!(
-            !registry.sessions.lock().contains_key("proj/feat"),
+            !registry.0.sessions.lock().contains_key("proj/feat"),
             "the removed session's registry entry must not linger"
         );
     }
@@ -1794,21 +1825,21 @@ mod tests {
         let registry = SessionRegistry::default();
         let id = "proj/feat".to_string();
 
-        assert!(registry.starting.lock().insert(id.clone()));
+        assert!(registry.0.starting.lock().insert(id.clone()));
         let guard = StartGuard {
-            registry: &registry,
+            registry: registry.clone(),
             id: id.clone(),
         };
 
         // A second concurrent start for the same id must be rejected while
         // the first is still mid-spawn.
-        assert!(!registry.starting.lock().insert(id.clone()));
+        assert!(!registry.0.starting.lock().insert(id.clone()));
 
         drop(guard);
 
         // Released once the first attempt's guard drops, so a retry (or the
         // now-registered session's own next start) can reserve it again.
-        assert!(registry.starting.lock().insert(id));
+        assert!(registry.0.starting.lock().insert(id));
     }
 
     #[test]
