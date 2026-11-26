@@ -23,26 +23,39 @@ pub fn project_icon(project: String) -> Option<String> {
 /// Returns the project name. The empty commit is what makes the very first
 /// worktree possible — `git worktree add` needs a commit to branch from — while
 /// leaving all actual scaffolding to the agent that runs there.
+///
+/// `async` + `spawn_blocking` for the same reason as `create_worktree`:
+/// a non-async command runs inline on the GTK main thread, and this does real
+/// disk work (`git init` + commit) plus a keychain read, since registering
+/// reloads settings — which froze the whole UI for its duration.
 #[tauri::command]
-pub fn create_project(parent: String, name: String) -> Result<String, String> {
+pub async fn create_project(parent: String, name: String) -> Result<String, String> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("project name can't be empty".to_string());
     }
-    match corral_core::project_create::create(&name, &parent) {
-        Ok(_) => Ok(name),
-        Err(corral_core::Error::ProjectDirNotEmpty(dir)) => Err(format!(
+    let create_name = name.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        corral_core::project_create::create(&create_name, &parent)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(project_create_error)?;
+    Ok(name)
+}
+
+/// The actionable copy for `project_create`'s two expected failures.
+fn project_create_error(e: corral_core::Error) -> String {
+    match e {
+        corral_core::Error::ProjectDirNotEmpty(dir) => format!(
             "{} already exists and isn't empty — pick a different name or location, or use Add project to register it",
             dir.display()
-        )),
+        ),
         // `create` validates names in `project_create`; give the dialog the
         // same actionable copy the non-empty case gets instead of the bare
         // "invalid name: ..." Display string.
-        Err(corral_core::Error::InvalidName(_)) => Err(
-            "that name can't be used as a folder name — use a single path segment (no slashes, no surrounding spaces)"
-                .to_string(),
-        ),
-        Err(e) => Err(e.to_string()),
+        corral_core::Error::InvalidName(_) => "that name can't be used as a folder name — use a single path segment (no slashes, no surrounding spaces)".to_string(),
+        e => e.to_string(),
     }
 }
 

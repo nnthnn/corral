@@ -257,6 +257,27 @@ on a Mac — keep that in mind when touching `process.rs`, `caffeinate.rs`, or
   secret goes through `secret::set/get/clear` with the config dir, never into
   `settings.json` (which is re-serialized on every toggle and snapshotted to
   `.bak`). Every store file and backup is written `0600`.
+- **The Linux keyring backend must never run on a thread with a Tokio runtime
+  already active.** `zbus`'s blocking API blocks the calling thread on its own
+  process-wide runtime, so calling it from a Tauri command panicked on the very
+  first `invoke()` — "Cannot start a runtime from within a runtime" when the
+  call happens on a Tokio worker, "Cannot drop a runtime in a context where
+  blocking is not allowed" (`tokio/src/runtime/blocking/shutdown.rs`) when a
+  runtime built on that thread is dropped. `Runtime::new()` also *inherits*
+  the ambient handle, so wrapping the call in `new_current_thread` didn't fix
+  it, and neither did `spawn_blocking`. `secret.rs::on_keyring_thread` now
+  runs every OS-store call on a fresh `std::thread` (no ambient runtime, and
+  nowhere near a runtime worker that a keychain prompt would stall).
+  `secret::tests::os_store_calls_survive_a_tokio_worker_thread` pins this —
+  it fails with the exact panic above if the guard is removed. Any *new* call
+  into `zbus` (or `secret_service`) must go through a thread like that, not
+  straight from a command, an `async` block, or a spawned task.
+- **`create_project` (and anything else doing real work) must be `async` +
+  `spawn_blocking`.** A non-`async` `#[tauri::command]` body runs inline on
+  the GTK main thread (`create_ipc_handler` → `on_message` →
+  `run_invoke_handler`), so disk/git/keychain work freezes the whole UI.
+  `create_project` was one of these: `git init` + commit + a settings reload
+  (which reads the keychain) ran inline, which is what exposed the panic above.
 - **Rust changes need a full app restart.** Vite HMR only reloads the
   frontend; new/changed Tauri commands or Rust logic won't take effect until
   the binary rebuilds (e.g. `just run`). Frontend-only changes hot-reload
