@@ -199,6 +199,10 @@ interface CommandMap {
     result: LinearIssueSummary[];
   };
   linear_issue: { args: { id: string }; result: LinearIssue };
+  /** The one way a new key reaches the backend. It's a separate argument
+   * rather than part of `save_settings`, since `Settings.linear_api_key` is
+   * `#[serde(skip)]` and never travels with the settings blob. */
+  linear_set_api_key: { args: { key: string }; result: undefined };
   linear_clear_api_key: { args: undefined; result: undefined };
   /** Where the key is stored: "your system keychain" or the file fallback. */
   linear_key_storage: { args: undefined; result: string };

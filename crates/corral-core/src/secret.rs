@@ -338,7 +338,12 @@ pub(crate) mod tests {
 
     /// Tests must never touch a real keychain, so the module's logic is
     /// exercised against the file backend.
-    fn force_file_backend() -> std::sync::MutexGuard<'static, ()> {
+    ///
+    /// This is also what `settings::tests` calls (it's `pub(crate)` for
+    /// exactly that): locking the mutex serializes the tests, but *setting*
+    /// the env var is what actually redirects them, so a bare
+    /// `FILE_ONLY_LOCK.lock()` alone would leave the OS store in play.
+    pub(crate) fn force_file_backend() -> std::sync::MutexGuard<'static, ()> {
         // Env vars are process-global; serialize the tests that touch them.
         let guard = FILE_ONLY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // SAFETY: Rust 2024 makes `set_var` unsafe because a concurrent reader

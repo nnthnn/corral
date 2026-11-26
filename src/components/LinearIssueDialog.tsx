@@ -1,6 +1,12 @@
 import clsx from "clsx";
 import { Loader2, Search, Ticket } from "lucide-react";
-import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import {
+  type KeyboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useDialogRef } from "../hooks/useDialogRef";
 import { attachIssueToAgent, LINEAR_KEY_SAVED_EVENT } from "../lib/linear";
 import { invoke } from "../lib/tauri";
@@ -17,6 +23,136 @@ const RECENT_LIMIT = 10;
 
 function close(): void {
   useStore.setState({ linearDialogOpen: false });
+}
+
+/** Linear reports colors as `#rrggbb`. Anything else is dropped so a surprise
+ * payload can't put arbitrary CSS into an inline style, and so a missing color
+ * degrades to the neutral chip instead of an unstyled one. */
+function hexColor(color: string | null): string | null {
+  return color && /^#[0-9a-f]{6}$/i.test(color) ? color : null;
+}
+
+/** Relative luminance, for picking text that stays readable on a solid badge.
+ * (WCAG 2.x definition.) */
+function luminance(hex: string): number {
+  const channel = (i: number) => {
+    const c = Number.parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
+}
+
+/** Foreground for a solid badge in `hex`: whichever of near-white and
+ * near-black contrasts more. Fixed ink beats `color-mix` here because the
+ * project palette runs from `#5E6AD2` to `#F2C94C`, and a mid-tone like the
+ * teal would fail against both if it had to share one foreground. */
+function readableOn(hex: string): string {
+  const bg = luminance(hex);
+  const contrastWith = (other: number) =>
+    (Math.max(bg, other) + 0.05) / (Math.min(bg, other) + 0.05);
+  const white = contrastWith(1);
+  const ink = contrastWith(luminance("#121212"));
+  return white >= ink ? "#ffffff" : "#121212";
+}
+
+/** Shared shape for the project and status badges, so the two read as the same
+ * kind of object and a row with either keeps the same height. `border` is
+ * always present — transparent when filled, `border-border` when neutral —
+ * because dropping it would shrink the box by a pixel. */
+const BADGE_CLASSES =
+  "flex min-w-0 shrink-0 items-center whitespace-nowrap rounded-sm border px-1.5 py-1 text-label font-medium leading-none";
+
+/** Convert `#rrggbb` to `[hue, saturation, lightness]` — hue in turns (0..1),
+ * the other two in 0..1. Standard HSL, only used for the badge fill. */
+function toHsl(hex: string): [number, number, number] {
+  const r = Number.parseInt(hex.slice(1, 3), 16) / 255;
+  const g = Number.parseInt(hex.slice(3, 5), 16) / 255;
+  const b = Number.parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return [0, 0, l];
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  const hue =
+    max === r
+      ? ((g - b) / d + (g < b ? 6 : 0)) / 6
+      : max === g
+        ? ((b - r) / d + 2) / 6
+        : ((r - g) / d + 4) / 6;
+  return [hue, s, l];
+}
+
+function fromHsl(h: number, s: number, l: number): string {
+  const channel = (p: number, q: number, t: number) => {
+    let x = t;
+    if (x < 0) x += 1;
+    if (x > 1) x -= 1;
+    if (x < 1 / 6) return p + (q - p) * 6 * x;
+    if (x < 1 / 2) return q;
+    if (x < 2 / 3) return p + (q - p) * (2 / 3 - x) * 6;
+    return p;
+  };
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const hex2 = (v: number) =>
+    Math.round(v * 255)
+      .toString(16)
+      .padStart(2, "0");
+  return `#${hex2(channel(p, q, h + 1 / 3))}${hex2(channel(p, q, h))}${hex2(channel(p, q, h - 1 / 3))}`;
+}
+
+/** Fill for a badge in this theme. Linear's palette includes very light colors
+ * (its `Todo` state is `#e2e2e2`), and a near-white slab with dark text glares
+ * on a dark surface, so every fill is capped in lightness while keeping its
+ * hue — the color still identifies the project or status, it just sits inside
+ * the theme's tonal range instead of punching a hole through it. */
+function badgeFill(hex: string): string {
+  const [h, s, l] = toHsl(hex);
+  return fromHsl(h, s, Math.min(l, 0.4));
+}
+
+/** Solid badge fill: the color itself, with ink chosen for contrast on it. */
+function badgeStyle(color: string) {
+  const fill = badgeFill(color);
+  return {
+    backgroundColor: fill,
+    borderColor: fill,
+    color: readableOn(fill),
+  };
+}
+
+/** One badge in the picker's row: a project chip or a status chip. The color is
+ * whichever Linear reported for that field (validated here, since a payload we
+ * didn't expect must not reach an inline style); `null` degrades to the neutral
+ * bordered chip. `data-linear-badge` marks the element carrying the fill, so a
+ * test can target the box rather than the text inside it. */
+function LinearBadge({
+  label,
+  color,
+  className,
+  title,
+}: {
+  label: string;
+  color: string | null;
+  className?: string;
+  title?: string;
+}) {
+  const hex = hexColor(color);
+  return (
+    <span
+      data-linear-badge={label}
+      className={clsx(
+        BADGE_CLASSES,
+        className,
+        !hex && "border-border text-muted",
+      )}
+      style={hex ? badgeStyle(hex) : undefined}
+      title={title}
+    >
+      <span className="truncate">{label}</span>
+    </span>
+  );
 }
 
 function openSettings(): void {
@@ -194,6 +330,19 @@ export function LinearIssueDialog() {
   const results = isSearchMode ? searchResults : recent;
   const loading = isSearchMode ? searching : recentLoading;
   const error = isSearchMode ? searchError : recentError;
+  // Linear identifiers vary in width (`DEV-9`, `DEV-10`, `ENG-1234`), and
+  // letting each row size its own leaves every title starting at a different
+  // x. One shared width — the longest identifier on screen, in monospace
+  // `ch` units — keeps the title column straight without truncating the wide
+  // ones. The floor keeps a single short result from collapsing the column.
+  const identifierChars = useMemo(
+    () =>
+      results.reduce(
+        (width, issue) => Math.max(width, issue.identifier.length),
+        6,
+      ),
+    [results],
+  );
 
   async function select(summary: LinearIssueSummary): Promise<void> {
     if (attaching) return;
@@ -293,10 +442,10 @@ export function LinearIssueDialog() {
           </div>
           <ul ref={listRef} className="min-h-0 flex-1 overflow-y-auto p-1.5">
             {error && (
-              <li className="px-2 py-2 text-sub text-danger">{error}</li>
+              <li className="px-1.5 py-2 text-sub text-danger">{error}</li>
             )}
             {!error && results.length === 0 && (
-              <li className="px-2 py-2 text-sub text-muted">
+              <li className="px-1.5 py-2 text-sub text-muted">
                 {isSearchMode
                   ? searching
                     ? "Searching…"
@@ -307,7 +456,7 @@ export function LinearIssueDialog() {
               </li>
             )}
             {!error && !isSearchMode && results.length > 0 && (
-              <li className="px-2 py-1 text-label text-muted">
+              <li className="px-1.5 py-1 text-label text-muted">
                 Recent tickets
               </li>
             )}
@@ -321,18 +470,33 @@ export function LinearIssueDialog() {
                     disabled={attaching !== null}
                     data-active={isActive ? true : undefined}
                     className={clsx(
-                      "flex w-full cursor-pointer items-baseline gap-2 rounded-sm px-2 py-2 text-left disabled:cursor-default",
+                      "flex w-full cursor-pointer items-center gap-2 rounded-sm px-1.5 py-2 text-left disabled:cursor-default",
                       isActive ? "bg-surface-2" : "bg-transparent",
                     )}
                     onMouseEnter={() => setActiveIndex(i)}
                     onClick={() => void select(issue)}
                   >
-                    <span className="shrink-0 font-mono text-label text-muted">
+                    <span
+                      className="shrink-0 font-mono text-label text-muted"
+                      style={{ width: `${identifierChars}ch` }}
+                    >
                       {issue.identifier}
                     </span>
                     <span className="min-w-0 flex-1 truncate text-body">
                       {issue.title}
                     </span>
+                    {issue.project && (
+                      // Solid badge: the project's own color as the fill, with
+                      // a near-black or near-white ink chosen per color so a
+                      // light project (amber) and a dark one (indigo) both
+                      // stay legible.
+                      <LinearBadge
+                        label={issue.project.name}
+                        color={issue.project.color}
+                        className="max-w-[9rem]"
+                        title={issue.project.name}
+                      />
+                    )}
                     {isAttaching ? (
                       <Loader2
                         size={14}
@@ -340,9 +504,13 @@ export function LinearIssueDialog() {
                       />
                     ) : (
                       issue.state && (
-                        <span className="shrink-0 text-label text-muted">
-                          {issue.state}
-                        </span>
+                        // Same badge as the project, in the workflow state's
+                        // color — Linear's own status colors, not a
+                        // category-derived palette.
+                        <LinearBadge
+                          label={issue.state.name}
+                          color={issue.state.color}
+                        />
                       )
                     )}
                   </button>

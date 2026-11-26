@@ -150,11 +150,16 @@ pub struct Settings {
     /// issue titles/bodies. Empty means "Linear integration not set up".
     ///
     /// Unlike every other field this is a credential, so it is *never*
-    /// serialized: `#[serde(skip)]` keeps it out of `settings.json` (and its
-    /// `.bak` snapshots) entirely, and out of any `Settings` handed across the
-    /// IPC boundary to the webview. It lives in its own owner-only file next
-    /// to `settings.json` — see [`load_linear_api_key`] /
-    /// [`set_linear_api_key`] — which is the only way in or out.
+    /// serialized or deserialized: `#[serde(skip)]` keeps it out of
+    /// `settings.json` (and its `.bak` snapshots) entirely, and out of any
+    /// `Settings` handed across the IPC boundary in either direction. It lives
+    /// in its own owner-only file next to `settings.json` — see
+    /// [`load_linear_api_key`] / [`set_linear_api_key`] — and the webview sets
+    /// it through the dedicated `linear_set_api_key` command, never through
+    /// `save_settings`. Leaving it deserializable (merely
+    /// `skip_serializing`) would make every unrelated settings save a write
+    /// path for the credential, and "blank means unchanged" would then have to
+    /// be enforced by convention in two places instead of not arising at all.
     #[serde(skip)]
     pub linear_api_key: String,
     /// Whether a Linear API key is stored, for the UI to gate on (the key
@@ -270,8 +275,8 @@ pub fn clear_linear_api_key() -> Result<()> {
 
 fn load_under(path: &std::path::Path) -> Result<Settings> {
     let mut settings: Settings = json_store::load_or_default(path, "settings")?;
-    // Older builds stored the key *inside* `settings.json`; `#[serde(skip)]`
-    // now ignores it, so migrate a legacy copy into the secret store and evict
+    // Older builds stored the key *inside* `settings.json`; the secret store
+    // is now the only home for it, so migrate a legacy copy there and evict
     // it from the JSON blob (`.bak` copies go on the next save). Without this,
     // the first release that ships this would silently lose keys set by the
     // previous one.
@@ -367,26 +372,13 @@ fn save_under(path: &std::path::Path, settings: &Settings) -> Result<()> {
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
-    // A blank key means "unchanged" rather than "clear the stored key": the
-    // webview never receives the real key (`#[serde(skip)]`), so every save
-    // it sends has it blank, and treating that as a clear would log the user
-    // out of Linear on the next unrelated toggle. Clearing is explicit, via
-    // `clear_linear_api_key`.
-    let new_key = settings.linear_api_key.trim();
-    // Belt-and-suspenders: `#[serde(skip)]` already keeps the key out of the
-    // blob, but blanking it here means a future change to that attribute
-    // can't silently start writing the credential to `settings.json`.
+    // Defense in depth: the field is `#[serde(skip)]` and the webview sets the
+    // key through `linear_set_api_key`, so `save_under` should never see one.
+    // Blanking it anyway means a future change to that attribute can't make
+    // this the write path for the credential (and `#[serde]` already keeps it
+    // out of both `settings.json` and its `.bak` snapshot).
     let mut scrubbed = settings.clone();
     scrubbed.linear_api_key.clear();
-    scrubbed.linear_api_key_set = settings.linear_api_key_set || !new_key.is_empty();
-    // The key goes to the secret store (keychain, or its file fallback) and
-    // never through `#[serde]`, so neither `settings.json` nor its `.bak`
-    // snapshot can contain it. Outside the settings lock: keychain access can
-    // prompt for unlock, and holding the store lock across that would stall
-    // every other corral process waiting on settings.
-    if !new_key.is_empty() {
-        secret::set(LINEAR_API_KEY, dir, new_key)?;
-    }
     json_store::with_locked_path(dir, &file_name, |path| {
         // Preserve what's on disk before overwriting it: `settings.json` is
         // shared across every corral build on the machine, so a file written
@@ -550,6 +542,10 @@ mod tests {
 
     #[test]
     fn save_then_load_round_trips_a_non_default_settings() {
+        // `load_under` reads the key from the secret store, so this touches the
+        // store's env var; the guard keeps it on the file backend and out of
+        // any real keychain (see `secret::tests::force_file_backend`).
+        let _guard = crate::secret::tests::force_file_backend();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         let s = Settings {
@@ -582,7 +578,7 @@ mod tests {
             opencode2_executable_path: String::new(),
             pi_executable_path: "/opt/pi/bin/pi".into(),
             browser_enabled: false,
-            linear_api_key: "lin_api_test".into(),
+            linear_api_key: String::new(),
             linear_api_key_set: true,
         };
 
@@ -621,8 +617,14 @@ mod tests {
         );
         assert_eq!(loaded.pi_executable_path, s.pi_executable_path);
         assert_eq!(loaded.browser_enabled, s.browser_enabled);
-        assert_eq!(loaded.linear_api_key, s.linear_api_key);
-        assert!(loaded.linear_api_key_set);
+        // The key isn't part of the blob (`#[serde(skip)]`), so this is about
+        // the *flag* surviving the round trip; the key itself is covered by
+        // `a_key_in_the_settings_blob_is_ignored_either_way` and
+        // `linear_api_key_never_reaches_settings_json_or_its_backup`.
+        assert_eq!(loaded.linear_api_key, "");
+        // The flag is derived from the store on every load (not read from the
+        // file), so with no key stored it correctly comes back false.
+        assert!(!loaded.linear_api_key_set);
     }
 
     #[test]
@@ -639,23 +641,23 @@ mod tests {
 
     #[test]
     fn linear_api_key_never_reaches_settings_json_or_its_backup() {
-        let _guard = crate::secret::tests::FILE_ONLY_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        // `secret::tests::force_file_backend` both serializes this test against
+        // the others and points the store at the config dir's file, so nothing
+        // here can reach a real keychain.
+        let _guard = crate::secret::tests::force_file_backend();
         // The whole reason the key lives in its own file: `settings.json` is
         // rewritten on every unrelated toggle, and every save snapshots the
         // previous contents to `.bak`. Neither may contain the credential.
         let dir = tempfile::tempdir().unwrap();
         let path = settings_path_in(dir.path());
-        let mut s = Settings {
-            linear_api_key: "lin_api_secret".into(),
-            ..Settings::default()
-        };
+        // Through the supported write path, not a field on `Settings` — that's
+        // the whole point of the attribute (see
+        // `a_key_in_the_settings_blob_is_ignored_either_way`).
+        secret::set(LINEAR_API_KEY, dir.path(), "lin_api_secret").unwrap();
+        let mut s = Settings::default();
         save_under(&path, &s).unwrap();
-
         // A later save from the webview (which never receives the key) must
         // not clear the stored one.
-        s.linear_api_key.clear();
         s.sidebar_width = 400;
         save_under(&path, &s).unwrap();
 
@@ -672,10 +674,48 @@ mod tests {
     }
 
     #[test]
+    fn a_key_in_the_settings_blob_is_ignored_either_way() {
+        // The credential has exactly one way in (`set_linear_api_key`, behind
+        // `linear_set_api_key`) and one way out (`load`). A `Settings` value
+        // that carries a key — the webview's own bug, a hand-written IPC call,
+        // a future frontend that forgets the dedicated command — must neither
+        // write it to disk nor be able to read one back out.
+        let _guard = crate::secret::tests::force_file_backend();
+        let dir = tempfile::tempdir().unwrap();
+        let path = settings_path_in(dir.path());
+        let ipc = serde_json::json!({
+            "editor_command": "zeditor",
+            "linear_api_key": "lin_api_smuggled",
+            "linear_api_key_set": true,
+        });
+        let settings: Settings = serde_json::from_value(ipc).unwrap();
+        // Deserialization drops it: `save_settings` is not a credential path.
+        assert_eq!(settings.linear_api_key, "");
+
+        save_under(&path, &settings).unwrap();
+        assert_eq!(secret::get(LINEAR_API_KEY, dir.path()).unwrap(), None);
+        assert_eq!(load_under(&path).unwrap().linear_api_key, "");
+
+        // And the supported path still works, from either direction. (Written
+        // through `secret::set` against the temp dir rather than
+        // `set_linear_api_key`, which targets the real config root.)
+        secret::set(LINEAR_API_KEY, dir.path(), "lin_api_typed").unwrap();
+        let loaded = load_under(&path).unwrap();
+        assert_eq!(loaded.linear_api_key, "lin_api_typed");
+        assert!(loaded.linear_api_key_set);
+        // Outbound: never in the webview's copy.
+        let outbound = serde_json::to_value(&loaded).unwrap();
+        assert!(outbound.get("linear_api_key").is_none());
+
+        // A later unrelated save must not disturb the stored key.
+        let later: Settings = serde_json::from_value(outbound).unwrap();
+        save_under(&path, &later).unwrap();
+        assert_eq!(load_under(&path).unwrap().linear_api_key, "lin_api_typed");
+    }
+
+    #[test]
     fn legacy_key_inside_settings_json_is_migrated_out() {
-        let _guard = crate::secret::tests::FILE_ONLY_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::secret::tests::force_file_backend();
         // Builds before this one stored the key in `settings.json`; the first
         // launch after the upgrade must move it to the key file and evict it
         // from the blob, or the key would be silently forgotten (and keep
@@ -698,9 +738,7 @@ mod tests {
 
     #[test]
     fn unreadable_key_file_is_an_error_not_a_silent_clear() {
-        let _guard = crate::secret::tests::FILE_ONLY_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::secret::tests::force_file_backend();
         // A key file that exists but can't be read must surface as an error:
         // treating it as "not set" would make the Settings form offer to add
         // a key, and the next save would overwrite the one still on disk.
@@ -715,9 +753,7 @@ mod tests {
 
     #[test]
     fn legacy_key_file_moves_into_the_secret_store() {
-        let _guard = crate::secret::tests::FILE_ONLY_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::secret::tests::force_file_backend();
         // The layout shipped before the keyring work wrote a plain
         // `linear_api_key` file. Upgrading must adopt it (rather than treating
         // the store as empty) and put it behind `secret`.
