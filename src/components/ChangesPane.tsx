@@ -9,7 +9,7 @@ import { loadDir } from "../lib/files";
 import { showError } from "../lib/toasts";
 import { currentWt, useStore } from "../store";
 import type { ChangedFile, PrInfo, Worktree } from "../types";
-import { wtId } from "../utils";
+import { isMergeComplete, wtId } from "../utils";
 import { Button } from "./Button";
 import { ChangeStat, SyncIcon } from "./ChangeStatusBadges";
 import { FileTree } from "./FileTree";
@@ -113,6 +113,13 @@ export function ChangesPane() {
   /** Path of the file whose discard confirmation is currently open. */
   const [revertPath, setRevertPath] = useState<string | null>(null);
   const [reverting, setReverting] = useState(false);
+  const justMerged = useStore((s) =>
+    worktreeId ? s.justMergedIds.has(worktreeId) : false,
+  );
+  /** A merged worktree is treated as read-only: its work has landed, so
+   * discarding a working-tree edit is pure loss with no way to get it back
+   * from the branch. Copy-path and diff viewing stay available. */
+  const merged = wt ? isMergeComplete(wt.status, prInfo, justMerged) : false;
 
   // A discard confirmation belongs to a file *in one worktree*, but the pane
   // isn't keyed by worktree — switching while one is open would leave it
@@ -123,13 +130,22 @@ export function ChangesPane() {
     setRevertPath(null);
   }, [worktreeId]);
 
+  // Same for the branch becoming merged while the prompt is open (e.g. the PR
+  // poll lands): the affordance goes away, so the prompt must too.
+  useEffect(() => {
+    if (merged) setRevertPath(null);
+  }, [merged]);
+
   function switchPanelTab(tab: "changes" | "files") {
     useStore.setState({ changesPanelTab: tab });
     if (tab === "files" && wt) loadDir(wt, "");
   }
 
   async function confirmRevert(f: ChangedFile) {
-    if (!wt || reverting) return;
+    // `merged` is re-checked here, not just at render: the stash is the last
+    // line of defence if a confirm was somehow still reachable when the
+    // branch's merged state landed.
+    if (!wt || reverting || merged) return;
     setReverting(true);
     try {
       await revertFile(wt, f.path, f.old_path);
@@ -266,7 +282,7 @@ export function ChangesPane() {
                     <PathLabel path={f.path} oldPath={f.old_path} />
                   </span>
                   <span className="change-slot grid flex-none justify-items-end items-center">
-                    {revertPath === f.path ? (
+                    {!merged && revertPath === f.path ? (
                       <span className="change-revert col-start-1 row-start-1 flex items-center gap-1.5 rounded-md border border-border bg-surface-2 pl-2 pr-1 py-0.5 shadow-sm">
                         <span className="text-caption text-muted whitespace-nowrap">
                           Discard changes?
@@ -327,7 +343,7 @@ export function ChangesPane() {
                           >
                             <Copy size={11} />
                           </Button>
-                          {f.dirty && (
+                          {!merged && f.dirty && (
                             <Button
                               variant="ghost"
                               square
