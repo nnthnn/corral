@@ -247,9 +247,9 @@ export interface LinearIssueSummary {
   team: string | null;
   /** Project name; null for issues that aren't in a project. */
   project: string | null;
-  /** The status's hex color (`#5E6AD2`), for the row's status dot. */
+  /** The status's hex color (`#5E6AD2`), for the row's status badge. */
   state_color: string | null;
-  /** The project's hex color, for tinting the project chip. */
+  /** The project's hex color, for the project badge. */
   project_color: string | null;
 }
 

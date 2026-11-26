@@ -30,11 +30,11 @@ pub struct LinearIssueSummary {
     /// Project name, when the issue belongs to one (`None` for issues that
     /// aren't in a project — Linear makes the field optional).
     pub project: Option<String>,
-    /// The status's hex color (`#5E6AD2`), for the row's status dot. Linear
-    /// documents it as a CSS color; parsed as an Option so a payload that
-    /// omits it can't fail the whole list.
+    /// The status's hex color (`#5E6AD2`), for the row's status badge.
+    /// Linear documents it as a CSS color; parsed as an Option so a payload
+    /// that omits it can't fail the whole list.
     pub state_color: Option<String>,
-    /// The project's hex color, for tinting the project chip.
+    /// The project's hex color, for the project badge.
     pub project_color: Option<String>,
 }
 
