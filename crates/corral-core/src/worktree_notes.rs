@@ -52,6 +52,13 @@ fn set_in(store: &KeyedStore<String>, key: &str, note: &str) -> Result<()> {
     }
 }
 
+/// Forget the notes for several worktrees at once, in one locked write — the
+/// plural form of the empty-note branch of [`set`], with the same
+/// trim-or-forget semantics. See [`crate::worktree::clear_worktree_state`].
+pub fn remove_keys(keys: &[String]) -> Result<()> {
+    store()?.remove_keys(keys)
+}
+
 /// Drop every stored note whose key isn't in `live` (e.g. a worktree removed
 /// out-of-band, bypassing [`crate::worktree::remove`], which would otherwise
 /// have cleared its own entry). Returns the number of entries dropped.

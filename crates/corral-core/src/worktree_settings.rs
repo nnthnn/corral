@@ -76,6 +76,13 @@ fn set_title_in(store: &KeyedStore<Entry>, key: &str, title: &str) -> Result<()>
     }
 }
 
+/// Forget the titles for several worktrees at once, in one locked write — the
+/// plural form of [`set_title`]'s empty-title branch. See
+/// [`crate::worktree::clear_worktree_state`].
+pub fn remove_keys(keys: &[String]) -> Result<()> {
+    store()?.remove_keys(keys)
+}
+
 /// Drop any stored entry whose key isn't in `live` (e.g. a worktree removed
 /// out-of-band, bypassing [`crate::worktree::remove`], which would
 /// otherwise have cleared its own entry). Returns the number of entries
@@ -87,6 +94,21 @@ pub fn retain_keys(live: &HashSet<String>) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removing_keys_drops_titles_in_one_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = KeyedStore::new(dir.path().to_path_buf(), "settings.json", "test", "entries");
+        set_title_in(&store, "proj/one", "First").unwrap();
+        set_title_in(&store, "proj/two", "Second").unwrap();
+
+        store
+            .remove_keys(&["proj/one".to_string(), "proj/two".to_string()])
+            .unwrap();
+
+        assert_eq!(store.get("proj/one").unwrap(), None);
+        assert_eq!(store.get("proj/two").unwrap(), None);
+    }
 
     #[test]
     fn set_title_in_trims_and_removes_empty() {

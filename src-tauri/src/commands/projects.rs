@@ -134,20 +134,16 @@ pub async fn remove_project(
     let provision_registry = provision_registry.handle();
     let run_registry = run_registry.handle();
     tauri::async_runtime::spawn_blocking(move || {
-        for wt in &worktrees {
-            let key = corral_core::agent_session::key(&wt.project, &wt.feature);
-            crate::commands::session::kill_session_best_effort(&app, &session_registry, &key);
-            crate::commands::provision::stop_and_remove(&provision_registry, &key);
-            crate::commands::run::stop_and_remove(&run_registry, &key);
-            if let Err(e) = corral_core::agent_session::remove(&key) {
-                tracing::warn!(
-                    "remove_project: failed to clear session store entry for {key}: {e}"
-                );
-            }
-            if let Err(e) = corral_core::worktree_notes::set(&key, "") {
-                tracing::warn!("remove_project: failed to clear worktree note for {key}: {e}");
-            }
+        let keys: Vec<String> = worktrees
+            .iter()
+            .map(|wt| corral_core::agent_session::key(&wt.project, &wt.feature))
+            .collect();
+        for key in &keys {
+            crate::commands::session::kill_session_best_effort(&app, &session_registry, key);
+            crate::commands::provision::stop_and_remove(&provision_registry, key);
+            crate::commands::run::stop_and_remove(&run_registry, key);
         }
+        corral_core::worktree::clear_worktree_state(&keys);
     })
     .await
     .map_err(|e| e.to_string())?;

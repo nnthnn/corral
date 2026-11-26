@@ -74,6 +74,12 @@ pub fn remove(key: &str) -> Result<()> {
     store()?.remove(key)
 }
 
+/// Forget the stored session ids for several worktrees at once, in one locked
+/// write — see [`crate::worktree::clear_worktree_state`].
+pub fn remove_keys(keys: &[String]) -> Result<()> {
+    store()?.remove_keys(keys)
+}
+
 /// Drop every stored entry whose key isn't in `live` (e.g. a worktree removed
 /// out-of-band, bypassing [`crate::worktree::remove`], which would otherwise
 /// have called [`remove`] itself). Returns the number of entries dropped.

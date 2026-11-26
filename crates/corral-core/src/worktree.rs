@@ -861,6 +861,35 @@ fn remove_under(
     Ok(())
 }
 
+/// Forget everything corral remembers about the given worktrees — their agent
+/// session ids (so a recreated worktree can't offer to `--resume` an unrelated
+/// conversation), their sidebar notes, and their titles. Used when a whole
+/// project is unregistered: its worktree directories stay on disk, so nothing
+/// else would ever clear these, and re-adding the project would otherwise
+/// resurrect the old state onto worktrees that may since have been reused.
+///
+/// All three stores are cleared in one locked write each, rather than one
+/// round trip per worktree. Best-effort per store: a failure is warned (the
+/// same way [`remove`] treats its own cleanup) and the others still run.
+pub fn clear_worktree_state(keys: &[String]) {
+    if keys.is_empty() {
+        return;
+    }
+    let cleared = [
+        ("session ids", agent_session::remove_keys(keys)),
+        ("notes", crate::worktree_notes::remove_keys(keys)),
+        ("titles", crate::worktree_settings::remove_keys(keys)),
+    ];
+    for (what, result) in cleared {
+        if let Err(e) = result {
+            tracing::warn!(
+                "clear_worktree_state: failed to clear {what} for {} worktree(s): {e}",
+                keys.len()
+            );
+        }
+    }
+}
+
 /// Drop any session-store, worktree-note, and worktree-title entries left
 /// behind by a worktree that no longer exists on disk — e.g. one removed
 /// out-of-band (`git worktree remove` run directly, or by an agent
