@@ -48,6 +48,13 @@ pub const SECRET_FILE_ONLY_ENV: &str = "CORRAL_SECRET_FILE_ONLY";
 pub enum Backend {
     /// The OS credential store (Secret Service / Keychain / Credential
     /// Manager). The value is not in any corral-readable plaintext file.
+    ///
+    /// That's the whole claim: on Linux this is a session-bus service, so any
+    /// other process running as the same user — including one started from
+    /// this app's own agent terminals — can ask it for the entry. It keeps
+    /// the key out of config files and backups and on macOS/Windows behind
+    /// their per-app protection; it does not isolate corral from other
+    /// programs running as you. Don't let the wording imply it does.
     OsStore,
     /// `~/.config/corral/<name>` with `0600` permissions.
     File,
@@ -96,11 +103,6 @@ fn os_store() -> Option<std::sync::Arc<keyring_core::CredentialStore>> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn os_store() -> Option<std::sync::Arc<keyring_core::CredentialStore>> {
-    None
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod secret_store {
     /// Placeholder so the `os_store` signature above compiles everywhere; the
     /// `None` it returns is the whole point of the unsupported-OS branch.
@@ -116,9 +118,20 @@ mod secret_store {
 
     pub type OsStore = Arc<zbus_secret_service_keyring_store::Store>;
 
-    /// zbus's blocking calls need a Tokio runtime on the current thread. corral
-    /// already depends on Tokio through Tauri, but a core-level caller (the
-    /// CLI) may not have one, so each operation enters a dedicated one.
+    /// A Tokio runtime for zbus's blocking calls, entered on the *calling*
+    /// thread. Only ever used on [`crate::secret`]'s own keyring thread —
+    /// see [`super::on_keyring_thread`] — which is what makes it safe:
+    ///
+    /// `zbus`'s blocking API blocks the calling thread on a process-wide
+    /// runtime, so it must not run on a thread that's already driving an
+    /// async runtime. Corral's GUI dispatches commands onto Tauri's Tokio
+    /// worker threads, and `Runtime::new()` inherits whatever runtime handle
+    /// is current, so building and entering these *inline* didn't make a
+    /// non-async command safe — it panicked on the first `invoke()` with
+    /// "Cannot start a runtime from within a runtime", and a
+    /// `block_on`/drop from a worker panics with "Cannot drop a runtime in a
+    /// context where blocking is not allowed". A plain `std::thread` starts
+    /// with no runtime context at all, so this is inert there.
     pub fn runtime() -> Option<tokio::runtime::Runtime> {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -127,7 +140,8 @@ mod secret_store {
     }
 
     pub fn registration() -> Option<Arc<keyring_core::CredentialStore>> {
-        let _enter = runtime()?.enter();
+        // `on_keyring_thread` has already entered the thread-local runtime
+        // this needs (see its doc comment for why that thread exists).
         let store: OsStore = zbus_secret_service_keyring_store::Store::new().ok()?;
         Some(store)
     }
@@ -168,8 +182,12 @@ mod secret_store {
 /// unusable.
 pub fn get(name: &str, config_dir: &Path) -> Result<Option<String>> {
     if !file_only()
-        && let Some(store) = os_store()
-        && let Some(value) = read_os(&store, config_dir, name)
+        && let Some(value) = on_keyring_thread({
+            let config_dir = config_dir.to_path_buf();
+            let name = name.to_string();
+            move || os_store().and_then(|store| read_os(&store, &config_dir, &name))
+        })
+        .flatten()
     {
         return Ok(Some(value));
     }
@@ -185,8 +203,13 @@ pub fn set(name: &str, config_dir: &Path, value: &str) -> Result<Backend> {
         return clear(name, config_dir).map(|_| Backend::File);
     }
     if !file_only()
-        && let Some(store) = os_store()
-        && write_os(&store, config_dir, name, value)
+        && on_keyring_thread({
+            let config_dir = config_dir.to_path_buf();
+            let name = name.to_string();
+            let value = value.to_string();
+            move || os_store().is_some_and(|store| write_os(&store, &config_dir, &name, &value))
+        })
+        .unwrap_or(false)
     {
         // A leftover copy must not outlive the keyring write, or a later
         // keyring failure would silently resurrect an old key.
@@ -202,10 +225,16 @@ pub fn set(name: &str, config_dir: &Path, value: &str) -> Result<Backend> {
 /// "remove key" that leaves a stale copy behind is worse than one extra
 /// no-op delete.
 pub fn clear(name: &str, config_dir: &Path) -> Result<()> {
-    if !file_only()
-        && let Some(store) = os_store()
-    {
-        delete_os(&store, config_dir, name);
+    if !file_only() {
+        on_keyring_thread({
+            let config_dir = config_dir.to_path_buf();
+            let name = name.to_string();
+            move || {
+                if let Some(store) = os_store() {
+                    delete_os(&store, &config_dir, &name);
+                }
+            }
+        });
     }
     crate::settings::remove_secret_file(&secret_path(config_dir, name))
 }
@@ -217,7 +246,8 @@ pub fn clear(name: &str, config_dir: &Path) -> Result<()> {
 /// call site reads the same regardless of how the probe changes later (a
 /// per-profile store, say). Neither backend needs it to answer.
 pub fn backend(_config_dir: &Path) -> Backend {
-    if !file_only() && os_store().is_some() {
+    let usable = !file_only() && on_keyring_thread(|| os_store().is_some()).unwrap_or(false);
+    if usable {
         Backend::OsStore
     } else {
         Backend::File
@@ -238,6 +268,96 @@ fn file_only() -> bool {
         std::env::var(SECRET_FILE_ONLY_ENV).as_deref(),
         Ok("1") | Ok("true")
     )
+}
+
+/// Run `f` on a thread of its own that owns a Tokio runtime, and wait for it.
+///
+/// Every OS-store call goes through here, for two reasons that both bit the
+/// GUI before this existed:
+///
+/// 1. **No ambient runtime.** A fresh `std::thread` starts with no Tokio
+///    context, so neither the runtime [`secret_store`] builds nor `zbus`'s own
+///    static one can end up nested inside (or dropped from inside) Tauri's
+///    — see [`secret_store`] for the panics that caused.
+/// 2. **Not on an async worker.** The GUI reaches secrets from commands that
+///    Tauri may run inline on whatever thread handled the IPC message, and a
+///    Secret Service round trip can block for a UI unlock prompt. Parking a
+///    runtime worker there stalls every other task on the pool, not just the
+///    caller, so the blocking work belongs on a thread made for it.
+///
+/// One thread per operation rather than a pool: secrets are read or written a
+/// handful of times per command (not in a loop), and a short-lived thread keeps
+/// the "no ambient runtime" guarantee trivially true.
+///
+/// Returns `None` if the operation panicked, or if the thread couldn't even be
+/// spawned. Either is logged as a `warn` before falling back to the file — a
+/// silent downgrade would hand the user a plaintext copy of their key with no
+/// sign anything went wrong, and the file backend is exactly where a write
+/// regression would first show up. Callers still treat `None` as "store
+/// unavailable": by falling back to the file, never by propagating a panic (or
+/// an error) onto the IPC thread.
+fn on_keyring_thread<T, F>(f: F) -> Option<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let joined = std::thread::Builder::new()
+        .name("corral-keyring".to_string())
+        .spawn(move || {
+            // A panic otherwise only prints to stderr (invisible in a bundled
+            // GUI app), so log it where the fallback decision is made.
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                #[cfg(target_os = "linux")]
+                {
+                    // Entered for the thread's whole life, so zbus's blocking
+                    // socket I/O has a reactor to register with. zbus still
+                    // drives that work on its own internal runtime; this one
+                    // only supplies the context. (macOS's Keychain and
+                    // Windows' Credential Manager are direct syscalls and need
+                    // no runtime at all.)
+                    if let Some(rt) = secret_store::runtime() {
+                        let _enter = rt.enter();
+                        return f();
+                    }
+                }
+                f()
+            }))
+        })
+        .inspect_err(|e| {
+            tracing::warn!(
+                "secret: couldn't start the OS-store thread ({e}); using the file fallback"
+            );
+        })
+        .ok()?;
+    match joined.join() {
+        Ok(Ok(value)) => Some(value),
+        Ok(Err(panic)) => {
+            tracing::warn!(
+                "secret: OS store call panicked ({}); using the file fallback",
+                panic_message(&panic)
+            );
+            None
+        }
+        Err(_) => {
+            // A panic that escaped `catch_unwind`'s reach (e.g. a panic while
+            // unwinding). Practically indistinguishable to the caller.
+            tracing::warn!(
+                "secret: OS store thread panicked unexpectedly; using the file fallback"
+            );
+            None
+        }
+    }
+}
+
+/// Best-effort text from a caught panic payload, for the warn line.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        s
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.as_str()
+    } else {
+        "<non-string panic payload>"
+    }
 }
 
 // The OS-store calls are all "best effort with a logged reason". They return
@@ -414,5 +534,98 @@ pub(crate) mod tests {
             service_name(Path::new("/home/u/.config/corral")),
             service_name(Path::new("/home/u/.config/corral/profiles/dev"))
         );
+    }
+
+    /// Regression test for the GUI's first `invoke()` panicking with either
+    /// "Cannot start a runtime from within a runtime" or "Cannot drop a
+    /// runtime in a context where blocking is not allowed".
+    ///
+    /// Tauri dispatches commands onto its Tokio runtime — non-async ones
+    /// inline on a worker, `async` ones on the same pool via a task — so a
+    /// secret lookup that built/entered a runtime on the *caller's* thread
+    /// blew up there. Every entry point must therefore work from inside a
+    /// task, not just from the plain `main` the CLI has.
+    ///
+    /// Runs against the real OS store rather than the file fallback: the file
+    /// path never touched a runtime, so forcing it here would test nothing.
+    /// It only reads, probes the backend, and clears a name that was never
+    /// set, so it can't disturb a real key.
+    #[test]
+    fn os_store_calls_survive_a_tokio_worker_thread() {
+        let _guard = FILE_ONLY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path().to_path_buf();
+        // Never set by corral, so the clear at the end is a no-op.
+        const NAME: &str = "corral-test-never-set";
+
+        // Same shape as the runtime Tauri provides for commands.
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (on_worker, from_pool) = rt.block_on(async {
+            let on_worker = tokio::spawn({
+                let dir = dir.clone();
+                async move {
+                    let value = get(NAME, &dir);
+                    backend(&dir);
+                    clear(NAME, &dir)?;
+                    value
+                }
+            })
+            .await
+            .expect("a worker-thread call must not panic");
+            // What an `async` command's spawn_blocking body does is just call
+            // these; the nesting that panicked came from the caller's runtime,
+            // not from which pool the work ran on.
+            let from_pool = tokio::task::spawn_blocking({
+                let dir = dir.clone();
+                move || get(NAME, &dir)
+            })
+            .await
+            .expect("a blocking-pool call must not panic");
+            (on_worker, from_pool)
+        });
+
+        // A read of a name that was never set is `Ok(None)`; a store that
+        // can't be reached at all would surface as an `Err`. Either way the
+        // call must return rather than panic, and the `.expect`s above are
+        // what fail if a runtime ever gets nested inside Tauri's again.
+        //
+        // The store is looked up on every one of these calls; if this machine
+        // has one (`backend` says so), that's the code path that panicked and
+        // is now genuinely exercised.
+        for value in [on_worker, from_pool].into_iter().flatten() {
+            assert_eq!(value, None, "a never-set secret must read as unset");
+        }
+    }
+
+    #[test]
+    fn on_keyring_thread_passes_a_successful_result_through() {
+        assert_eq!(on_keyring_thread(|| 41 + 1), Some(42));
+    }
+
+    /// A panicking OS-store call must not reach the caller as a panic — it
+    /// becomes `None`, which `set`/`get`/`backend` read as "store unavailable"
+    /// and handle with the file fallback (now with a warn, which is the point:
+    /// a silent downgrade would leave the key in plaintext with no hint).
+    #[test]
+    fn on_keyring_thread_swallows_a_panic_instead_of_propagating_it() {
+        let out = on_keyring_thread::<usize, _>(|| panic!("synthetic keyring panic"));
+        assert_eq!(out, None);
+    }
+
+    /// The panic payload's text makes it into `panic_message` (which the warn
+    /// line prints), for both shapes std's `panic!` produces.
+    #[test]
+    fn panic_message_reads_both_payload_shapes() {
+        let str_payload: Box<dyn std::any::Any + Send> = Box::new("boom");
+        assert_eq!(panic_message(&*str_payload), "boom");
+
+        let string_payload: Box<dyn std::any::Any + Send> = Box::new("boom".to_string());
+        assert_eq!(panic_message(&*string_payload), "boom");
+
+        let other_payload: Box<dyn std::any::Any + Send> = Box::new(7u8);
+        assert_eq!(panic_message(&*other_payload), "<non-string panic payload>");
     }
 }

@@ -169,6 +169,11 @@ enum ProjectAction {
         #[arg(long)]
         parent: Option<String>,
     },
+    /// Stop tracking a registered project, dropping its saved settings, its
+    /// worktrees' session/note entries, and any recorded agent session ids.
+    /// Nothing on disk is touched — the repo and its worktree directories stay
+    /// exactly where they are, and `corral project add` brings it back.
+    Remove { name: String },
 }
 
 #[derive(Clone, clap::ValueEnum)]
@@ -426,6 +431,24 @@ fn cmd_project(action: ProjectAction) -> Result<()> {
                 .with_context(|| format!("creating project {name}"))?;
             println!("created {name} -> {}", path.display());
             println!("next: corral new {name}");
+            Ok(())
+        }
+        ProjectAction::Remove { name } => {
+            // Mirrors the GUI's `remove_project`, minus its process cleanup
+            // (the CLI has no sessions of its own running): clear the
+            // per-worktree stores so a later re-add doesn't inherit stale
+            // notes, titles, or resume an agent session from before the
+            // removal.
+            let keys: Vec<String> = worktree::list()
+                .with_context(|| format!("listing worktrees before removing {name}"))?
+                .iter()
+                .filter(|w| w.project == name)
+                .map(|w| corral_core::agent_session::key(&w.project, &w.feature))
+                .collect();
+            corral_core::worktree::clear_worktree_state(&keys);
+            corral_core::project_settings::unregister(&name)
+                .with_context(|| format!("removing project {name}"))?;
+            println!("removed {name} (its files are untouched)");
             Ok(())
         }
     }

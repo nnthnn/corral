@@ -137,6 +137,18 @@ where
         })
     }
 
+    /// Forget every saved value for the keys in `keys`, in a single locked
+    /// read-modify-write — the plural form of [`remove`](Self::remove), for
+    /// tearing down many keys at once (a whole project's worktrees) without
+    /// re-reading and rewriting the store once per key.
+    pub fn remove_keys(&self, keys: &[String]) -> Result<()> {
+        self.with_locked(|store| {
+            for key in keys {
+                store.remove(key);
+            }
+        })
+    }
+
     /// Drop every entry whose key isn't in `live`. Returns the number dropped.
     pub fn retain_keys(&self, live: &HashSet<String>) -> Result<usize> {
         self.with_locked(|store| {
@@ -247,6 +259,49 @@ mod tests {
         store.set("k", Payload { title: "x".into() }).unwrap();
         store.remove("k").unwrap();
         assert!(!store.has("k").unwrap());
+    }
+
+    #[test]
+    fn remove_keys_drops_every_named_entry_and_leaves_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store(dir.path());
+        for (key, title) in [
+            ("proj/one", "a"),
+            ("proj/two", "b"),
+            ("proj/untouched", "c"),
+        ] {
+            store
+                .set(
+                    key,
+                    Payload {
+                        title: title.into(),
+                    },
+                )
+                .unwrap();
+        }
+
+        store
+            .remove_keys(&["proj/one".to_string(), "proj/two".to_string()])
+            .unwrap();
+
+        assert!(!store.has("proj/one").unwrap());
+        assert!(!store.has("proj/two").unwrap());
+        assert!(store.has("proj/untouched").unwrap());
+        // An unknown key is a no-op, not an error.
+        store.remove_keys(&["proj/never".to_string()]).unwrap();
+    }
+
+    #[test]
+    fn remove_keys_with_no_keys_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store(dir.path());
+        store
+            .set("proj/one", Payload { title: "a".into() })
+            .unwrap();
+
+        store.remove_keys(&[]).unwrap();
+
+        assert!(store.has("proj/one").unwrap());
     }
 
     #[test]

@@ -21,10 +21,19 @@ const EVENT_PREFIX: &str = "provision";
 /// `pty_process::Registry` in its own type so Tauri's `State<T>` extraction
 /// distinguishes it from `run::Registry`, even though both are backed by
 /// the same underlying mechanism.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Registry(pty_process::Registry);
 
 pub type ProvisionState = PtyProcessState;
+
+impl Registry {
+    /// A cheap, independent handle for moving into a `spawn_blocking` body
+    /// (e.g. `remove_project`'s teardown). The clone shares the same process
+    /// table.
+    pub fn handle(&self) -> Self {
+        self.clone()
+    }
+}
 
 /// Spawn `command` via `sh -c` in `cwd`, tracked in `registry` under `key`.
 /// See `pty_process::start` for the streaming/registry mechanics. Best-

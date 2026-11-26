@@ -281,14 +281,22 @@ fn load_under(path: &std::path::Path) -> Result<Settings> {
     // the first release that ships this would silently lose keys set by the
     // previous one.
     let config_dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-    migrate_legacy_linear_key(config_dir);
+    // The migration ends up with (or at least having looked for) the stored
+    // key, so it hands it back rather than making the read below start over.
+    // Each `secret::get` is a Secret Service round trip on its own thread now,
+    // and this runs on every `load` — i.e. on every settings save.
+    let stored = migrate_legacy_linear_key(config_dir);
     // The key lives in the secret store rather than in `settings.json`, so
     // load it the same way `save_under` persists it. A *missing* key is "not
     // set", not an error — `load` must stay usable for every other field. Any
     // other failure (a key we can't read) must not be turned into "not set":
     // the Settings form would then offer to add a key, and saving would
     // overwrite one that's still there.
-    settings.linear_api_key = secret::get(LINEAR_API_KEY, config_dir)?.unwrap_or_default();
+    let key = match stored {
+        Some(value) => value,
+        None => secret::get(LINEAR_API_KEY, config_dir),
+    }?;
+    settings.linear_api_key = key.unwrap_or_default();
     settings.linear_api_key_set = !settings.linear_api_key.is_empty();
     Ok(settings)
 }
@@ -300,52 +308,61 @@ fn load_under(path: &std::path::Path) -> Result<Settings> {
 /// Two generations of legacy layout are handled: the original one kept the key
 /// in `settings.json` (this function), and the immediately preceding one kept
 /// it in a plain `linear_api_key` file beside it (the file branch below).
-fn migrate_legacy_linear_key(config_dir: &std::path::Path) {
+///
+/// Returns the key now in the secret store, when early on in the migration it
+/// had to read it anyway (`Ok(None)` = read succeeded and found nothing,
+/// absent = it never looked and the caller must ask). Only the rare path where
+/// something is actually migrated does the caller see a *second* read: the one
+/// [`secret::set`] makes to verify the write.
+fn migrate_legacy_linear_key(config_dir: &std::path::Path) -> Option<Result<Option<String>>> {
     let path = settings_path_in(config_dir);
     // The file layout wins if both exist — it's newer — and only a stale
     // `settings.json` copy gets adopted.
-    let stored = secret::get(LINEAR_API_KEY, config_dir).ok().flatten();
+    let stored = secret::get(LINEAR_API_KEY, config_dir);
+    let stored_value = stored.as_ref().ok().and_then(|v| v.clone());
     if let Ok(Some(file_value)) = read_secret_file(&config_dir.join(LINEAR_API_KEY))
-        && stored.is_none()
+        && stored_value.is_none()
         && let Err(e) = secret::set(LINEAR_API_KEY, config_dir, &file_value)
     {
         tracing::warn!("settings: couldn't move the Linear key file into the secret store: {e}");
     }
     let raw = match std::fs::read(&path) {
         Ok(bytes) => bytes,
-        Err(_) => return,
+        Err(_) => return Some(stored),
     };
     let Ok(Value::Object(mut map)) = serde_json::from_slice::<Value>(&raw) else {
-        return;
+        return Some(stored);
     };
     let Some(Value::String(legacy)) = map.remove("linear_api_key") else {
-        return;
+        return Some(stored);
     };
     let key = legacy.trim();
-    let already_stored = secret::get(LINEAR_API_KEY, config_dir)
-        .ok()
-        .flatten()
-        .is_some_and(|v| !v.is_empty());
-    if !key.is_empty()
-        && !already_stored
-        && let Err(e) = secret::set(LINEAR_API_KEY, config_dir, key)
-    {
+    let already_stored = stored_value.as_ref().is_some_and(|v| !v.is_empty());
+    let adopted = !key.is_empty() && !already_stored;
+    if adopted && let Err(e) = secret::set(LINEAR_API_KEY, config_dir, key) {
         // Keep the legacy value in place rather than dropping it on a failed
         // write — losing the user's key to storage trouble is worse than
         // leaving it in the old spot for the next launch.
         tracing::warn!("settings: couldn't move legacy Linear key into the secret store: {e}");
-        return;
+        return Some(stored);
     }
     match serde_json::to_vec_pretty(&Value::Object(map)) {
         Ok(bytes) => {
             if let Err(e) = json_store::write_private(&path, &bytes) {
                 tracing::warn!("settings: couldn't evict legacy Linear key from {path:?}: {e}");
-                return;
+            } else {
+                tracing::info!("settings: moved Linear API key out of settings.json");
             }
-            tracing::info!("settings: moved Linear API key out of settings.json");
         }
         Err(e) => tracing::warn!("settings: couldn't rewrite {path:?} after migration: {e}"),
     }
+    // The blob just lost its copy, so the answer is the adopted key when this
+    // call wrote one, else whatever read succeeded above. Never a fresh read:
+    // an unreadable store surfaces as the original error, and a failed `set`
+    // already returned.
+    Some(Ok(stored_value
+        .filter(|v| !v.is_empty())
+        .or_else(|| adopted.then(|| key.to_string()))))
 }
 
 fn save_under(path: &std::path::Path, settings: &Settings) -> Result<()> {
@@ -871,5 +888,45 @@ mod tests {
             std::fs::read_to_string(&backup).unwrap(),
             r#"{"editor_command": "zeditor"}"#
         );
+    }
+
+    #[test]
+    fn migration_hands_back_the_stored_key_so_load_need_not_read_again() {
+        // Not the file backend: this pins the read count on the *keyring*
+        // path, which is the one that costs a Secret Service round trip per
+        // read on the GUI's `get_settings`/`save_settings` hot path.
+        let _guard = crate::secret::tests::FILE_ONLY_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let path = settings_path_in(dir.path());
+        std::fs::write(
+            &path,
+            r#"{"editor_command":"zeditor","linear_api_key":"lin_api_legacy"}"#,
+        )
+        .unwrap();
+        let mock = keyring_core::mock::Store::new().unwrap();
+        keyring_core::set_default_store(mock.clone());
+
+        let migrated = migrate_legacy_linear_key(dir.path());
+        match migrated {
+            Some(Ok(Some(key))) => assert_eq!(key, "lin_api_legacy"),
+            Some(Ok(None)) => panic!("the legacy key must be adopted"),
+            Some(Err(e)) => panic!("migration must not error: {e}"),
+            None => panic!("a completed migration must hand the key back"),
+        }
+        // The caller's own read is then answered by the migration, so the
+        // store is only touched by the verification inside the write.
+        assert_eq!(
+            secret::get(LINEAR_API_KEY, dir.path()).unwrap().as_deref(),
+            Some("lin_api_legacy")
+        );
+        // A second pass finds nothing legacy left to do and also hands back
+        // what it read.
+        assert!(matches!(
+            migrate_legacy_linear_key(dir.path()),
+            Some(Ok(Some(_)))
+        ));
+        keyring_core::set_default_store(keyring_core::mock::Store::new().unwrap());
     }
 }
