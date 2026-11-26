@@ -92,6 +92,26 @@ describe("RunPanel", () => {
     );
   });
 
+  it("doesn't overwrite a command the user typed while detection was in flight", async () => {
+    let resolveCommand: (value: string) => void = () => {};
+    vi.mocked(invoke).mockImplementation((cmd) =>
+      cmd === "resolve_run_command"
+        ? new Promise<string>((resolve) => {
+            resolveCommand = resolve;
+          })
+        : Promise.resolve(null),
+    );
+    render(<RunPanel wt={wt} />);
+
+    const input = screen.getByPlaceholderText("e.g. pnpm dev");
+    fireEvent.change(input, { target: { value: "pnpm start" } });
+    await act(async () => {
+      resolveCommand("pnpm dev");
+    });
+
+    expect(input).toHaveValue("pnpm start");
+  });
+
   it("starts a run, optimistically resetting output/running state", async () => {
     vi.mocked(invoke).mockImplementation((cmd) =>
       cmd === "resolve_run_command"
