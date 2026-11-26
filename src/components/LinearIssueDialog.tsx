@@ -49,6 +49,22 @@ function readableOn(hex: string): string {
   return white >= ink ? "#ffffff" : "#121212";
 }
 
+/** Shared shape for the project and status badges, so the two read as the same
+ * kind of object and a row with either keeps the same height. `border` is
+ * always present — transparent when filled, `border-border` when neutral —
+ * because dropping it would shrink the box by a pixel. */
+const BADGE_CLASSES =
+  "flex min-w-0 shrink-0 items-center whitespace-nowrap rounded-sm border px-1.5 py-1 text-label font-medium leading-none";
+
+/** Solid badge fill: the color itself, with ink chosen for contrast on it. */
+function badgeStyle(color: string) {
+  return {
+    backgroundColor: color,
+    borderColor: color,
+    color: readableOn(color),
+  };
+}
+
 function openSettings(): void {
   useStore.setState({ linearDialogOpen: false, settingsOpen: true });
 }
@@ -381,22 +397,15 @@ export function LinearIssueDialog() {
                       // Solid badge: the project's own color as the fill, with
                       // a near-black or near-white ink chosen per color so a
                       // light project (amber) and a dark one (indigo) both
-                      // stay legible. `border` stays on both variants so a
-                      // project-less row and one with a badge keep the same
-                      // box height.
+                      // stay legible.
                       <span
                         className={clsx(
-                          "flex max-w-[9rem] min-w-0 shrink-0 items-center rounded-sm border px-1.5 py-1 text-label font-medium leading-none",
+                          BADGE_CLASSES,
+                          "max-w-[9rem]",
                           !projectColor && "border-border text-muted",
                         )}
                         style={
-                          projectColor
-                            ? {
-                                backgroundColor: projectColor,
-                                borderColor: projectColor,
-                                color: readableOn(projectColor),
-                              }
-                            : undefined
+                          projectColor ? badgeStyle(projectColor) : undefined
                         }
                         title={issue.project}
                       >
@@ -410,13 +419,18 @@ export function LinearIssueDialog() {
                       />
                     ) : (
                       issue.state && (
-                        <span className="flex shrink-0 items-center gap-1.5 text-label text-muted">
-                          {stateColor && (
-                            <span
-                              className="size-1.5 shrink-0 rounded-full"
-                              style={{ backgroundColor: stateColor }}
-                            />
+                        // Same badge as the project, in the workflow state's
+                        // color — Linear's own status colors, not a
+                        // category-derived palette.
+                        <span
+                          className={clsx(
+                            BADGE_CLASSES,
+                            !stateColor && "border-border text-muted",
                           )}
+                          style={
+                            stateColor ? badgeStyle(stateColor) : undefined
+                          }
+                        >
                           {issue.state}
                         </span>
                       )

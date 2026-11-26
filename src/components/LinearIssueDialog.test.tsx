@@ -103,34 +103,34 @@ describe("LinearIssueDialog", () => {
     expect(screen.getAllByText(/Q3 Auth/)).toHaveLength(1);
   });
 
-  it("fills the project badge with its own color, and keeps the status dot", async () => {
+  it("fills the project and status badges with their own colors", async () => {
     mockLinear({ recent: [summary] });
     openWithKey();
     render(<LinearIssueDialog />);
 
-    const badge = (await screen.findByText("Q3 Auth")).closest(
+    const project = (await screen.findByText("Q3 Auth")).closest(
       "[title]",
     ) as HTMLElement;
-    // Solid fill, not a tint: the background *is* the project's color.
-    expect(badge.getAttribute("style")).toMatch(/5e6ad2|94, 106, 210/i);
-    expect(badge.querySelector("[style*='background-color']")).toBeNull();
-    const stateDot = screen
-      .getByText("In Progress")
-      .querySelector("[style*='background-color']");
-    expect(stateDot).not.toBeNull();
+    const status = screen.getByText("In Progress");
+    // Both are solid fills in their own Linear color — the project's indigo
+    // and the workflow state's amber, not one shared accent.
+    expect(project.getAttribute("style")).toMatch(/5e6ad2|94, 106, 210/i);
+    expect(status.getAttribute("style")).toMatch(/f2c94c|242, 201, 76/i);
+    // The old dot-before-the-label is gone: the fill carries the color now,
+    // and nothing nested inside the badges repeats it.
+    expect(project.querySelector("[style*='background-color']")).toBeNull();
+    expect(status.querySelector("[style*='background-color']")).toBeNull();
   });
 
-  it("picks ink that stays readable on light and dark project colors", async () => {
+  it("picks ink that stays readable on light and dark badge colors", async () => {
     mockLinear({
       recent: [
-        { ...summary, project: "Amber", project_color: "#f2c94c" },
         {
           ...summary,
-          id: "uuid-3",
-          identifier: "ENG-7",
-          title: "Other ticket",
-          project: "Indigo",
-          project_color: "#5e6ad2",
+          project: "Amber",
+          project_color: "#f2c94c",
+          state: "Done",
+          state_color: "#5e6ad2",
         },
       ],
     });
@@ -140,14 +140,14 @@ describe("LinearIssueDialog", () => {
     const amber = (await screen.findByText("Amber")).closest(
       "[title]",
     ) as HTMLElement;
-    const indigo = screen.getByText("Indigo").closest("[title]") as HTMLElement;
-    expect(amber.style.color).not.toBe(indigo.style.color);
-    // Dark ink on the light color, light ink on the dark one.
+    const indigo = screen.getByText("Done");
+    // Same helper, opposite outcomes: dark ink on the light amber fill, light
+    // ink on the dark indigo one.
     expect(amber.getAttribute("style")).toMatch(/121212|18, 18, 18/i);
     expect(indigo.getAttribute("style")).toMatch(/ffffff|255, 255, 255/i);
   });
 
-  it("falls back to the neutral chip when a color isn't hex", async () => {
+  it("falls back to the neutral badge when a color isn't hex", async () => {
     mockLinear({
       recent: [
         {
@@ -163,12 +163,9 @@ describe("LinearIssueDialog", () => {
     const chip = (await screen.findByText("Q3 Auth")).closest(
       "[title]",
     ) as HTMLElement;
+    // No inline colors at all: the neutral border/muted-text pair applies.
     expect(chip.getAttribute("style")).toBeNull();
-    expect(
-      screen
-        .getByText("In Progress")
-        .querySelector("[style*='background-color']"),
-    ).toBeNull();
+    expect(screen.getByText("In Progress").getAttribute("style")).toBeNull();
   });
 
   it("replaces the recent list with search results once you type", async () => {
