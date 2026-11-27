@@ -5,7 +5,7 @@ import { addProject, openNewProjectDialog } from "../lib/projects";
 import { focusFirstProjectCreate, openDeleteDialog } from "../lib/worktrees";
 import { useStore } from "../store";
 import type { Worktree } from "../types";
-import { isFullyMerged, shortenPath, wtId } from "../utils";
+import { isFullyMerged, resolvePrInfo, shortenPath, wtId } from "../utils";
 import { Button } from "./Button";
 
 const WRAPPER_CLASS =
@@ -74,12 +74,9 @@ export function Detail({
   const justMerged = useStore((s) =>
     wt ? s.justMergedIds.has(wtId(wt)) : false,
   );
-  const storedPrInfo = useStore((s) => s.prInfoByWtId);
-  const prInfo = wt
-    ? storedPrInfo.has(wtId(wt))
-      ? (storedPrInfo.get(wtId(wt)) ?? null)
-      : (wt.pr_state ?? null)
-    : null;
+  const prInfo = useStore((s) =>
+    wt ? resolvePrInfo(wt, s.prInfoByWtId) : null,
+  );
   const projects = useStore((s) => s.projects);
   const starting =
     useStore((s) => (wt ? s.startingIds.has(wtId(wt)) : false)) ||

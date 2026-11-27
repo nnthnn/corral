@@ -12,7 +12,12 @@ import type {
   Settings,
   Worktree,
 } from "./types";
-import { matchesWorktreeFilter, orderedWorktreeIds, wtId } from "./utils";
+import {
+  matchesWorktreeFilter,
+  orderedWorktreeIds,
+  resolvePrInfo,
+  wtId,
+} from "./utils";
 
 export const DEFAULT_SETTINGS: Settings = {
   editor_command: "zeditor",
@@ -314,7 +319,7 @@ export function worktreeTabIds(s: AppState): TabId[] {
   const wt = currentWt(s);
   if (!wt) return [];
   const ids: TabId[] = ["agent", "run", "setup"];
-  if (s.prInfoByWtId.get(wtId(wt))) ids.push("pr");
+  if (resolvePrInfo(wt, s.prInfoByWtId)) ids.push("pr");
   if (s.diffTab) ids.push("diff");
   if (s.fileTab) ids.push("file");
   return ids;

@@ -122,10 +122,11 @@ export function isFullyMerged(
  * (stored as an explicit `null`) doesn't fall through to possibly-stale poll
  * data — otherwise the coarse 5-minute background poll's `wt.pr_state`.
  *
- * Every surface that asks "is this merged?" (`WorktreeRow`'s dot,
- * `isMergeComplete` behind the merge/rebase buttons and the read-only Changes
- * pane) must go through this same value, or a row that's never been selected
- * this app-run disagrees with the ones that have. */
+ * Every surface that asks "is this merged?" or "is there a PR?" — `WorktreeRow`'s
+ * dot, `isMergeComplete` behind the merge/rebase buttons and the read-only
+ * Changes pane, the header's checks polling, `PrPane`, and the PR tab
+ * (`worktreeTabIds`/`TabBar`) — must go through this same value, or a row
+ * that's never been selected this app-run disagrees with the ones that have. */
 export function resolvePrInfo(
   wt: Worktree,
   prInfoByWtId: Map<string, PrInfo | null>,

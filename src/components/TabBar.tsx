@@ -10,7 +10,7 @@ import {
   useStore,
   worktreeTabIds,
 } from "../store";
-import { wtId } from "../utils";
+import { resolvePrInfo, wtId } from "../utils";
 import { BullSpinner } from "./BullSpinner";
 import { LassoSpinner } from "./LassoSpinner";
 import { WagonWheelSpinner } from "./spinners";
@@ -33,8 +33,9 @@ export function TabBar() {
   const working = useStore(
     (s) => !!wt && sessionStatus(s, wtId(wt))?.cls === "working",
   );
-  const prInfo =
-    useStore((s) => (wt ? s.prInfoByWtId.get(wtId(wt)) : null)) ?? null;
+  const prInfo = useStore((s) =>
+    wt ? resolvePrInfo(wt, s.prInfoByWtId) : null,
+  );
   const prChecksPending = useStore((s) =>
     wt ? checksArePending(s.checksByWtId.get(wtId(wt))) : false,
   );

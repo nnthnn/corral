@@ -8,7 +8,7 @@ import {
 } from "../lib/worktrees";
 import { useStore } from "../store";
 import type { CheckRun, PrInfo, Worktree } from "../types";
-import { isFullyMerged, isMergeComplete, wtId } from "../utils";
+import { isFullyMerged, isMergeComplete, resolvePrInfo, wtId } from "../utils";
 import { Button } from "./Button";
 
 export type MergeButtonState =
@@ -92,7 +92,9 @@ export function useMergeButtonContent(
   const merging = useStore((s) => (id ? s.mergingIds.has(id) : false));
   const mergingPr = useStore((s) => (id ? s.mergingPrIds.has(id) : false));
   const preparingPr = useStore((s) => (id ? s.preparingPr.has(id) : false));
-  const prInfo = useStore((s) => (id ? s.prInfoByWtId.get(id) : null)) ?? null;
+  const prInfo = useStore((s) =>
+    wt ? resolvePrInfo(wt, s.prInfoByWtId) : null,
+  );
   const checks = useStore((s) => (id ? s.checksByWtId.get(id) : undefined));
 
   if (!wt) return { state: { kind: "hidden" }, note: null, action: null };

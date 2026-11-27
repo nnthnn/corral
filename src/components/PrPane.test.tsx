@@ -463,6 +463,23 @@ describe("PrPane", () => {
     expect(screen.getByText("#42")).toBeInTheDocument();
   });
 
+  it("shows the PR number from the poll's pr_state before a live fetch has run", () => {
+    render(
+      <PrPane
+        wt={{
+          ...wt,
+          pr_state: {
+            number: 42,
+            url: "https://x/pr/42",
+            state: "open",
+            is_draft: false,
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText("#42")).toBeInTheDocument();
+  });
+
   it("shows a Ready for review button for a draft PR, and calls markPrReady", () => {
     useStore.setState({
       prDetailsByWtId: new Map([["corral/hulling", details]]),

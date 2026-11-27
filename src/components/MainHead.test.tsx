@@ -199,4 +199,28 @@ describe("MainHead", () => {
     expect(screen.queryByText("Zed")).not.toBeInTheDocument();
     expect(screen.queryByText("Shell")).not.toBeInTheDocument();
   });
+
+  it("starts checks polling for an open PR known only from the poll's pr_state", async () => {
+    useStore.setState({
+      worktrees: [
+        {
+          ...wt,
+          pr_state: {
+            number: 7,
+            url: "https://x",
+            state: "open",
+            is_draft: false,
+          },
+        },
+      ],
+      selectedId: "corral/hulling",
+    });
+    render(<MainHead />);
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("pr_checks", {
+        project: "corral",
+        feature: "hulling",
+      }),
+    );
+  });
 });

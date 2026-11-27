@@ -6,6 +6,7 @@ import {
   sessionStatus,
   useStore,
   wantsAttention,
+  worktreeTabIds,
 } from "./store";
 import type { Worktree } from "./types";
 
@@ -59,6 +60,48 @@ describe("currentWt", () => {
       selectedId: null,
     };
     expect(currentWt(state)).toBeUndefined();
+  });
+});
+
+describe("worktreeTabIds", () => {
+  const polledOpenPr: Worktree["pr_state"] = {
+    number: 7,
+    url: "https://github.com/x/y/pull/7",
+    state: "open",
+    is_draft: false,
+  };
+
+  it("includes the PR tab from the polled pr_state before a live fetch has run", () => {
+    const wt = makeWorktree({ pr_state: polledOpenPr });
+    const state: AppState = {
+      ...useStore.getState(),
+      worktrees: [wt],
+      selectedId: "corral/hulling",
+    };
+    expect(worktreeTabIds(state)).toContain("pr");
+  });
+
+  it("keeps the PR tab when only the polled pr_state knows the PR has merged", () => {
+    const wt = makeWorktree({
+      pr_state: { ...polledOpenPr, state: "merged" as const },
+    });
+    const state: AppState = {
+      ...useStore.getState(),
+      worktrees: [wt],
+      selectedId: "corral/hulling",
+    };
+    expect(worktreeTabIds(state)).toContain("pr");
+  });
+
+  it("prefers a confirmed no-PR from the live store over the poll's pr_state", () => {
+    const wt = makeWorktree({ pr_state: polledOpenPr });
+    const state: AppState = {
+      ...useStore.getState(),
+      worktrees: [wt],
+      selectedId: "corral/hulling",
+      prInfoByWtId: new Map([["corral/hulling", null]]),
+    };
+    expect(worktreeTabIds(state)).not.toContain("pr");
   });
 });
 

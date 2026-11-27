@@ -164,6 +164,25 @@ describe("TabBar PR tab", () => {
     expect(screen.getByText("PR #7")).toBeInTheDocument();
   });
 
+  it("shows the PR tab from the polled pr_state before a live fetch has run", () => {
+    useStore.setState({
+      worktrees: [{ ...wt, pr_state: openPrInfo }],
+      selectedId: "corral/hulling",
+    });
+    render(<TabBar />);
+    expect(screen.getByText("PR #7")).toBeInTheDocument();
+  });
+
+  it("prefers a confirmed no-PR from the live store over the poll's pr_state", () => {
+    useStore.setState({
+      worktrees: [{ ...wt, pr_state: openPrInfo }],
+      selectedId: "corral/hulling",
+      prInfoByWtId: new Map([["corral/hulling", null]]),
+    });
+    render(<TabBar />);
+    expect(screen.queryByText(/^PR #/)).not.toBeInTheDocument();
+  });
+
   it("switches to the PR tab on click", () => {
     useStore.setState({
       worktrees: [wt],

@@ -27,7 +27,7 @@ import {
 import { toggleSetting } from "../lib/settings";
 import { openDeleteDialog, openRenameDialog } from "../lib/worktrees";
 import { currentWt, useStore } from "../store";
-import { worktreeTitle, wtId } from "../utils";
+import { resolvePrInfo, worktreeTitle, wtId } from "../utils";
 import { Button } from "./Button";
 import { toggleSidebar } from "./Sidebar";
 
@@ -134,7 +134,7 @@ function MainHeadActions({
   // `id` isn't read in the body — it's a reset trigger for switching worktrees.
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional reset-on-key-change
   useEffect(() => setSuppressStart(false), [id]);
-  const prInfo = useStore((s) => s.prInfoByWtId.get(id)) ?? null;
+  const prInfo = useStore((s) => resolvePrInfo(wt, s.prInfoByWtId));
   usePrChecksPolling(wt, prInfo?.state === "open");
   const starting = useStore((s) => s.startingIds.has(id));
 
