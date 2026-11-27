@@ -17,6 +17,14 @@ on each other. Claude Code, OpenCode, and Pi are all supported.
 > (Unix-socket hooks, symlinked `.claude` dirs, `/proc`-based process
 > tracking). Linux and macOS are the supported platforms for now.
 
+> **GitHub features are optional.** The PR tab, CI checks, and merge /
+> mark-ready are driven by the [`gh` CLI](https://cli.github.com/): they need
+> `gh` installed and signed in (`gh auth login`) in a repo with a GitHub
+> remote. corral never stores a GitHub token. Everything else — worktrees,
+> agent sessions, Run/Setup, diffs, files, local merges — works without `gh`;
+> when it's missing or signed out, GitHub surfaces simply stay unavailable
+> rather than blocking the app.
+
 ![corral's three-pane shell: an agent working in one worktree, with the Changes
 pane listing that branch's diff](docs/assets/corral-overview.png)
 
@@ -100,8 +108,9 @@ corral/
 
 Requirements: Rust, Node + pnpm, and — on Linux — the WebKitGTK stack
 (`webkit2gtk-4.1`, `libsoup-3.0`). macOS needs only Xcode's command-line tools.
-`git`, your agent CLI (`claude` and/or `opencode`), `gh` (for PRs), and your
-editor's CLI (`zeditor` on Linux, `zed` on macOS) should be on PATH.
+`git`, your agent CLI (`claude` and/or `opencode`), and your editor's CLI
+(`zeditor` on Linux, `zed` on macOS) should be on PATH. `gh` is optional — it's
+only needed for the GitHub features described at the top of this README.
 
 ```fish
 pnpm install        # frontend deps + Tauri CLI
@@ -188,8 +197,8 @@ Implemented:
 - **Run panel**: a long-lived per-worktree run command (e.g. `pnpm dev`) in
   its own tab, with best-effort auto-detection of the project's dev command.
 - **Git/PR integration**: fast-forward merge a worktree's branch into its
-  base, or push and open/update a GitHub PR via `gh`, with live CI checks in
-  the PR tab.
+  base, or push and open/update a GitHub PR via `gh` (optional — see the note
+  at the top), with live CI checks in the PR tab.
 - **Linear tickets + attachments**: look up a ticket by ID or title (recently
   updated tickets are listed by default) from the header or the command
   palette, and attach its body to the running agent. Drop files on the

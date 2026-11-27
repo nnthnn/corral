@@ -2,8 +2,9 @@
 
 > Project context for coding agents, committed to the repo. opencode reads
 > this natively; Claude Code picks it up via the committed `CLAUDE.md` shim
-> (`@AGENTS.md`). `IDEAS.md` stays git-ignored as a personal backlog. Since
-> this file is tracked, keep it free of secrets and anything personal.
+> (`@AGENTS.md`). Backlog items live in Linear (Dev team → "Corral"
+> project), not in a repo file. Since this file is tracked, keep it free of
+> secrets and anything personal.
 
 ## What corral is
 
@@ -609,7 +610,8 @@ on a Mac — keep that in mind when touching `process.rs`, `caffeinate.rs`, or
 
 ## Status
 
-See `IDEAS.md` for the backlog. As of the latest work, implemented:
+Bugs, ideas, and follow-up work go in Linear (Dev team → "Corral" project),
+not in a repo file. As of the latest work, implemented:
 
 - **Worktree management** (GUI + CLI): create / rename / remove, per-project
   provisioning rules (files to copy, one-shot setup command run via the
